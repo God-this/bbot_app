@@ -1,0 +1,224 @@
+// 메인 채팅 화면
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../theme.dart';
+import '../services/chat_provider.dart';
+import '../widgets/welcome_view.dart';
+import '../widgets/chat_bubble.dart';
+import '../widgets/chat_input_bar.dart';
+import '../widgets/sources_sheet.dart';
+
+class ChatScreen extends StatefulWidget {
+  const ChatScreen({super.key});
+
+  @override
+  State<ChatScreen> createState() => _ChatScreenState();
+}
+
+class _ChatScreenState extends State<ChatScreen> {
+  final _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: _buildAppBar(context),
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          children: [
+            // 채팅 영역
+            Expanded(
+              child: Consumer<ChatProvider>(
+                builder: (context, chat, _) {
+                  if (!chat.hasMessages) {
+                    return WelcomeView(
+                      suggestions: chat.suggestedQuestions,
+                      onSuggestionTap: (text) {
+                        // 줄바꿈 제거하여 전송
+                        chat.sendMessage(text.replaceAll('\n', ' '));
+                        _scrollToBottom();
+                      },
+                    );
+                  }
+
+                  // 새 메시지 시 스크롤
+                  _scrollToBottom();
+
+                  return ListView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    itemCount: chat.messages.length,
+                    itemBuilder: (context, index) {
+                      final msg = chat.messages[index];
+
+                      // 날짜 구분선
+                      Widget? dateDivider;
+                      if (index == 0 ||
+                          !_isSameDay(
+                            chat.messages[index - 1].timestamp,
+                            msg.timestamp,
+                          )) {
+                        dateDivider = _DateDivider(date: msg.timestamp);
+                      }
+
+                      return Column(
+                        children: [
+                          if (dateDivider != null) dateDivider,
+                          ChatBubble(
+                            message: msg,
+                            onSourcesTap: msg.sources != null
+                                ? () => SourcesSheet.show(context, msg.sources!)
+                                : null,
+                          ),
+                        ],
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+
+            // 입력 바
+            Consumer<ChatProvider>(
+              builder: (context, chat, _) {
+                return ChatInputBar(
+                  isLoading: chat.isTyping,
+                  onSend: (text) {
+                    chat.sendMessage(text);
+                    _scrollToBottom();
+                  },
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  PreferredSizeWidget _buildAppBar(BuildContext context) {
+    return AppBar(
+      title: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              color: AppColors.primarySurface,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(
+              Icons.smart_toy_rounded,
+              size: 16,
+              color: AppColors.primaryDark,
+            ),
+          ),
+          const SizedBox(width: 8),
+          const Text('BeBot'),
+        ],
+      ),
+      actions: [
+        Consumer<ChatProvider>(
+          builder: (context, chat, _) {
+            if (!chat.hasMessages) return const SizedBox.shrink();
+            return IconButton(
+              icon: const Icon(Icons.refresh_rounded, size: 22),
+              tooltip: '새 대화',
+              onPressed: () {
+                showDialog(
+                  context: context,
+                  builder: (_) => AlertDialog(
+                    title: const Text('새 대화 시작'),
+                    content: const Text('현재 대화 내역이 삭제됩니다.\n새 대화를 시작할까요?'),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('취소'),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          chat.clearChat();
+                          Navigator.pop(context);
+                        },
+                        child: const Text(
+                          '시작',
+                          style: TextStyle(color: AppColors.primary),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  bool _isSameDay(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+}
+
+// ─── 날짜 구분선 ──────────────────────────────────────
+class _DateDivider extends StatelessWidget {
+  final DateTime date;
+  const _DateDivider({required this.date});
+
+  @override
+  Widget build(BuildContext context) {
+    final now = DateTime.now();
+    String label;
+    if (_isSameDay(date, now)) {
+      label = '오늘';
+    } else if (_isSameDay(date, now.subtract(const Duration(days: 1)))) {
+      label = '어제';
+    } else {
+      label = '${date.month}월 ${date.day}일';
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 40),
+      child: Row(
+        children: [
+          const Expanded(child: Divider(color: AppColors.divider)),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Text(
+              label,
+              style: Theme.of(context).textTheme.labelSmall,
+            ),
+          ),
+          const Expanded(child: Divider(color: AppColors.divider)),
+        ],
+      ),
+    );
+  }
+
+  bool _isSameDay(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+}

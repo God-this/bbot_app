@@ -1,0 +1,55 @@
+name: bebot_app
+description: BeBot - 창조과학 인공지능 챗봇
+
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # Networking
+  http: ^1.2.0
+  
+  # Database
+  postgres: ^3.1.0
+  
+  # State Management
+  provider: ^6.1.1
+  
+  # UI & Formatting
+  flutter_markdown: ^0.7.1
+  google_fonts: ^6.1.0
+  flutter_animate: ^4.3.0
+  
+  # Video Player
+  youtube_player_flutter: ^9.0.3
+  
+  # Icons
+  cupertino_icons: ^1.0.6
+  flutter_svg: ^2.0.9
+  
+  # URL Launcher
+  url_launcher: ^6.2.2
+  
+  # UUID
+  uuid: ^4.2.1
+  
+  # Environment
+  flutter_dotenv: ^5.1.0
+  
+  # Storage
+  shared_preferences: ^2.2.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - .env
