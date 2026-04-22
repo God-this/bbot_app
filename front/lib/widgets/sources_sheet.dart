@@ -121,62 +121,6 @@ class SourcesSheet extends StatelessWidget {
   }
 }
 
-// ─── 인라인 출처 섹션 (답변 아래 바로 표시, 서버 선별 상위 3개) ──────────────
-class InlineSourcesSection extends StatelessWidget {
-  final SourceInfo sources;
-  const InlineSourcesSection({super.key, required this.sources});
-
-  @override
-  Widget build(BuildContext context) {
-    final top = sources.topSources;
-
-    return Padding(
-      padding: const EdgeInsets.only(top: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 헤더
-          Row(
-            children: [
-              const Icon(Icons.format_quote_rounded,
-                  color: AppColors.primary, size: 16),
-              const SizedBox(width: 6),
-              Text(
-                '관련 출처 상위 ${top.length}건',
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      color: AppColors.primary,
-                      fontWeight: FontWeight.w700,
-                    ),
-              ),
-              if (sources.totalCount > top.length) ...[
-                const SizedBox(width: 6),
-                // Text(
-                //   '(전체 ${sources.totalCount}건 중)',
-                //   style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                //         color: AppColors.textTertiary,
-                //       ),
-                // ),
-              ],
-            ],
-          ),
-          const SizedBox(height: 10),
-
-          ...top.map((source) {
-            if (source is VideoSource) {
-              return _VideoSourceCard(source: source);
-            } else if (source is WebSource) {
-              return _WebSourceCard(source: source);
-            } else if (source is BookSource) {
-              return _BookSourceCard(source: source);
-            }
-            return const SizedBox.shrink();
-          }),
-        ],
-      ),
-    );
-  }
-}
-
 // ─── 섹션 헤더 ────────────────────────────────────────
 class _SectionHeader extends StatelessWidget {
   final IconData icon;

@@ -37,14 +37,11 @@ class SourceInfo {
   final List<WebSource> webSources;
   final List<BookSource> bookSources;
   final List<VideoSource> videoSources;
-  /// 서버에서 score 기준으로 선별된 상위 출처 (WebSource | BookSource | VideoSource)
-  final List<Object> topSources;
 
   SourceInfo({
     this.webSources = const [],
     this.bookSources = const [],
     this.videoSources = const [],
-    this.topSources = const [],
   });
 
   bool get isEmpty =>

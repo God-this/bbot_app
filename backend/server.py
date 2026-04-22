@@ -49,7 +49,6 @@ class SourceDoc(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     sources: dict          # { web_docs: [...], book_docs: [...], video_docs: [...] }
-    top_sources: list      # 관련성 상위 3개 (score 기준, UI 표시용)
 
 
 # ──────── 엔드포인트 ────────
@@ -80,19 +79,7 @@ async def chat(req: ChatRequest):
             "video_docs": raw.get("video_docs", []),
         }
 
-        # 전체 출처를 score 기준 정렬 후 상위 3개 선별 (UI 표시용)
-        all_docs = sources["web_docs"] + sources["book_docs"] + sources["video_docs"]
-        top_sources = []
-        for doc in sorted(all_docs, key=lambda d: d.get("score", 0))[:3]:
-            t = doc.get("type")
-            if t == "video":
-                top_sources.append({"type": t, "title": doc.get("title", ""), "url": doc.get("url", ""), "start": doc.get("start", 0), "end": doc.get("end", 0)})
-            elif t == "book":
-                top_sources.append({"type": t, "title": doc.get("book", ""), "page": doc.get("page", 0), "content": doc.get("content", "")})
-            else:
-                top_sources.append({"type": t, "title": doc.get("title", ""), "url": doc.get("url", ""), "content": doc.get("content", "")})
-
-        return ChatResponse(answer=answer, sources=sources, top_sources=top_sources)
+        return ChatResponse(answer=answer, sources=sources)
 
     except Exception as e:
         print(f"❌ 답변 생성 오류: {e}")
