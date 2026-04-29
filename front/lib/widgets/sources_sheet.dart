@@ -295,48 +295,15 @@ class _VideoSourceCardState extends State<_VideoSourceCard> {
             ),
           ),
 
-          // 임베드 차단 시 외부 열기 폴백
+          // 임베드 차단 시 안내 메시지
           if (_embedBlocked)
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '이 영상은 앱 내 재생이 제한되어 있습니다.',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: AppColors.textTertiary,
-                        ),
-                  ),
-                  const SizedBox(height: 8),
-                  GestureDetector(
-                    onTap: _openInYoutube,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: AppColors.videoBadge.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(Icons.open_in_new_rounded,
-                              size: 14, color: AppColors.videoBadge),
-                          SizedBox(width: 6),
-                          Text(
-                            'YouTube에서 열기',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.videoBadge,
-                            ),
-                          ),
-                        ],
-                      ),
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+              child: Text(
+                '이 영상은 앱 내 재생이 제한되어 있습니다.',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppColors.textTertiary,
                     ),
-                  ),
-                ],
               ),
             ),
 
@@ -363,7 +330,7 @@ class _VideoSourceCardState extends State<_VideoSourceCard> {
           // 스니펫
           if (widget.source.snippet.isNotEmpty && !_isPlayerVisible)
             Padding(
-              padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+              padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
               child: Text(
                 widget.source.snippet,
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
@@ -374,6 +341,38 @@ class _VideoSourceCardState extends State<_VideoSourceCard> {
                 overflow: TextOverflow.ellipsis,
               ),
             ),
+
+          // 항상 표시되는 YouTube에서 열기 버튼
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+            child: GestureDetector(
+              onTap: _openInYoutube,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppColors.videoBadge.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.open_in_new_rounded,
+                        size: 14, color: AppColors.videoBadge),
+                    SizedBox(width: 6),
+                    Text(
+                      'YouTube에서 열기',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.videoBadge,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
