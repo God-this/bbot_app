@@ -114,27 +114,91 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  static const String _adminPassword = 'bbot1234!';
+
+  void _showAdminLogin(BuildContext context) {
+    final controller = TextEditingController();
+    bool obscure = true;
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('관리자 인증'),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          content: TextField(
+            controller: controller,
+            obscureText: obscure,
+            autofocus: true,
+            decoration: InputDecoration(
+              hintText: '비밀번호를 입력하세요',
+              suffixIcon: IconButton(
+                icon: Icon(obscure ? Icons.visibility_off : Icons.visibility),
+                onPressed: () =>
+                    setDialogState(() => obscure = !obscure),
+              ),
+            ),
+            onSubmitted: (_) => _tryAdminLogin(dialogContext, controller.text),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('취소'),
+            ),
+            TextButton(
+              onPressed: () =>
+                  _tryAdminLogin(dialogContext, controller.text),
+              child: const Text(
+                '확인',
+                style: TextStyle(color: AppColors.primary),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _tryAdminLogin(BuildContext dialogContext, String input) {
+    if (input == _adminPassword) {
+      Navigator.pop(dialogContext);
+      Navigator.pushNamed(dialogContext, '/admin');
+    } else {
+      ScaffoldMessenger.of(dialogContext).showSnackBar(
+        const SnackBar(
+          content: Text('비밀번호가 올바르지 않습니다.'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
   PreferredSizeWidget _buildAppBar(BuildContext context) {
     return AppBar(
-      title: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              color: AppColors.primarySurface,
-              borderRadius: BorderRadius.circular(8),
+      title: GestureDetector(
+        onLongPress: () => _showAdminLogin(context),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: AppColors.primarySurface,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(
+                Icons.smart_toy_rounded,
+                size: 16,
+                color: AppColors.primaryDark,
+              ),
             ),
-            child: const Icon(
-              Icons.smart_toy_rounded,
-              size: 16,
-              color: AppColors.primaryDark,
-            ),
-          ),
-          const SizedBox(width: 8),
-          const Text('BeBot'),
-        ],
+            const SizedBox(width: 8),
+            const Text('BeBot'),
+          ],
+        ),
       ),
       actions: [
         Consumer<ChatProvider>(

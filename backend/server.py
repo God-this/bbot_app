@@ -8,7 +8,9 @@
 #   GET  /api/health     — 서버 상태 확인
 
 import sys
+import asyncio
 from pathlib import Path
+from datetime import datetime
 
 # 프로젝트 루트를 sys.path에 추가
 sys.path.insert(0, str(Path(__file__).parent))
@@ -19,6 +21,47 @@ from pydantic import BaseModel
 from typing import Optional
 
 app = FastAPI(title="BeBot API", version="1.0.0")
+
+# 영상 상태 캐시 (6시간마다 자동 갱신)
+_video_status_cache: dict = {"data": None, "checked_at": None}
+
+
+async def _refresh_video_status():
+    try:
+        from video_health_checker import VideoHealthChecker
+        checker = VideoHealthChecker()
+        videos = checker.get_all_videos()
+        results = []
+        for video in videos:
+            youtube_id = video.get("youtube_id")
+            if youtube_id:
+                status, message = checker.check_video_status(youtube_id)
+            else:
+                status, message = "error", "YouTube ID 없음"
+            results.append({
+                "video_id": video["video_id"],
+                "title": video["title"],
+                "url": video["url"],
+                "youtube_id": youtube_id,
+                "status": status,
+                "message": message,
+            })
+        _video_status_cache["data"] = results
+        _video_status_cache["checked_at"] = datetime.now().isoformat()
+        print(f"✅ 영상 상태 갱신 완료: {len(results)}건")
+    except Exception as e:
+        print(f"❌ 영상 상태 갱신 오류: {e}")
+
+
+async def _video_status_scheduler():
+    while True:
+        await _refresh_video_status()
+        await asyncio.sleep(7 * 24 * 3600)  # 1주일마다 반복
+
+
+@app.on_event("startup")
+async def startup():
+    asyncio.create_task(_video_status_scheduler())
 
 # CORS 설정 (Flutter 앱에서 접근 허용)
 app.add_middleware(
@@ -84,6 +127,29 @@ async def chat(req: ChatRequest):
     except Exception as e:
         print(f"❌ 답변 생성 오류: {e}")
         raise HTTPException(status_code=500, detail=f"답변 생성 중 오류 발생: {str(e)}")
+
+
+# ──────── Admin 엔드포인트 ────────
+@app.get("/api/admin/video-status")
+async def get_video_status():
+    """영상 상태 데이터 반환 (캐시 우선)"""
+    if _video_status_cache["data"] is None:
+        await _refresh_video_status()
+    results = _video_status_cache["data"] or []
+    return {
+        "total": len(results),
+        "ok_count": sum(1 for v in results if v["status"] == "ok"),
+        "problem_count": sum(1 for v in results if v["status"] != "ok"),
+        "videos": results,
+        "checked_at": _video_status_cache["checked_at"],
+    }
+
+
+@app.post("/api/admin/video-status/refresh")
+async def refresh_video_status():
+    """YouTube 상태를 즉시 재확인하고 결과 반환"""
+    await _refresh_video_status()
+    return await get_video_status()
 
 
 # ──────── 직접 실행 시 ────────

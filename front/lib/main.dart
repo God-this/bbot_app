@@ -5,8 +5,10 @@ import 'package:provider/provider.dart';
 
 import 'theme.dart';
 import 'services/api_service.dart';
+import 'services/admin_service.dart';
 import 'services/chat_provider.dart';
 import 'screens/chat_screen.dart';
+import 'screens/admin_dashboard_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -41,6 +43,7 @@ class BeBotApp extends StatelessWidget {
     );
 
     final apiService = BeBotApiService(baseUrl: backendUrl);
+    final adminService = AdminApiService(baseUrl: backendUrl);
 
     return MultiProvider(
       providers: [
@@ -53,6 +56,10 @@ class BeBotApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         theme: AppTheme.theme,
         home: const ChatScreen(),
+        routes: {
+          '/admin': (_) =>
+              AdminDashboardScreen(adminService: adminService),
+        },
       ),
     );
   }
