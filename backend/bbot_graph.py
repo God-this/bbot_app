@@ -27,6 +27,7 @@ from redis_semantic_cache import (
 
 )
 
+CACHE_ENABLED = False  # 캐시 활성화 여부 (True:활성화 / False:비활성화)
 
 client = get_client()
 
@@ -311,24 +312,21 @@ def generate(question: str, thread_id: str = "user_1"):
 
     print(f"🔍 Normalized Query: {normalized_question}\n")
 
-    # Exact Redis Cache 확인
+    if CACHE_ENABLED:
+        # Exact Redis Cache 확인
+        cached = get_cached_answer(normalized_question)
+        if cached:
+            print("⚡ Exact Redis Cache Hit!\n")
+            return cached["answer"], cached["sources"]
 
-    cached = get_cached_answer(normalized_question)
-
-    if cached:
-        print("⚡ Exact Redis Cache Hit!\n")
-        return cached["answer"], cached["sources"]
-
-    # Semantic Cache 확인
-
-    semantic_cached = search_semantic_cache(question)
-
-    if semantic_cached:
-        print("⚡ Semantic Cache Hit!\n")
-        return (
-            semantic_cached["answer"],
-            semantic_cached["sources"]
-        )
+        # Semantic Cache 확인
+        semantic_cached = search_semantic_cache(question)
+        if semantic_cached:
+            print("⚡ Semantic Cache Hit!\n")
+            return (
+                semantic_cached["answer"],
+                semantic_cached["sources"]
+            )
 
     print("❌ Cache Miss → RAG 실행\n")
 
@@ -500,24 +498,25 @@ def generate(question: str, thread_id: str = "user_1"):
         "chat_history": updated_history
     }
 
-    # Exact Redis Cache 저장
-    save_cached_answer(
-        normalized_question,
-        {
-            "answer": answer,
-            "sources": sources
-        }
-    )
-
-    # Semantic Cache 저장
-    save_semantic_cache(
-        question, 
-        {
+    if CACHE_ENABLED:
+        # Exact Redis Cache 저장
+        save_cached_answer(
+            normalized_question,
+            {
                 "answer": answer,
                 "sources": sources
-        }
-    )
+            }
+        )
 
-    print("💾 Redis Cache Saved!\n")
+        # Semantic Cache 저장
+        save_semantic_cache(
+            question,
+            {
+                "answer": answer,
+                "sources": sources
+            }
+        )
+
+        print("💾 Redis Cache Saved!\n")
 
     return answer, sources
