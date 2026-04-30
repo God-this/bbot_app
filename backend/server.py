@@ -4,8 +4,10 @@
 # 실행: uvicorn server:app --host 0.0.0.0 --port 8000
 #
 # 엔드포인트:
-#   POST /api/chat      — 질문 → 답변 + 출처
-#   GET  /api/health     — 서버 상태 확인
+#   POST /api/chat                       — 질문 → 답변 + 출처
+#   GET  /api/health                     — 서버 상태 확인
+#   GET  /api/admin/video-status         — 영상 상태 조회 (캐시)
+#   POST /api/admin/video-status/refresh — 영상 상태 즉시 재확인
 
 import sys
 import asyncio
@@ -22,7 +24,7 @@ from typing import Optional
 
 app = FastAPI(title="BeBot API", version="1.0.0")
 
-# 영상 상태 캐시 (6시간마다 자동 갱신)
+# 영상 상태 캐시 
 _video_status_cache: dict = {"data": None, "checked_at": None}
 
 
