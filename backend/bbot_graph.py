@@ -1,5 +1,3 @@
-## Parallel Retrieval
-
 import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
@@ -18,22 +16,14 @@ from bbot_web import retrieve_web_documents
 from bbot_book import retrieve_pages
 from bbot_video import retrieve_video_segments
 
-from redis_cache import get_cached_answer, save_cached_answer
+from redis_cache import save_cached_answer
 import re
 
-from redis_semantic_cache import (
-    search_semantic_cache,
-    save_semantic_cache
-
-)
-
-CACHE_ENABLED = False  # 캐시 활성화 여부 (True:활성화 / False:비활성화)
+from redis_semantic_cache import save_semantic_cache
 
 client = get_client()
 
-
 # ==================== State ====================
-
 class GraphState(TypedDict):
     question: str
     rewritten_question: str
@@ -45,7 +35,6 @@ class GraphState(TypedDict):
 
 
 # ==================== Utility ====================
-
 def format_timedelta(seconds: int) -> str:
     td = timedelta(seconds=int(seconds))
     total = int(td.total_seconds())
@@ -53,16 +42,13 @@ def format_timedelta(seconds: int) -> str:
     m, s = divmod(r, 60)
     return f"{h:02}:{m:02}:{s:02}"
 
-
 def detect_language(text: str) -> str:
     return "ko" if any("\uac00" <= c <= "\ud7a3" for c in text) else "en"
-
 
 def format_chat_history(history: List[str]) -> str:
     if not history:
         return "이전 대화 없음"
     return "\n".join(history)
-
 
 def normalize_query(query: str) -> str:
     query = query.lower().strip()
@@ -70,9 +56,7 @@ def normalize_query(query: str) -> str:
     query = re.sub(r"\s+", " ", query)
     return query
 
-
 # ==================== Parallel Retrieval ====================
-
 def retrieve_all_documents_parallel(question: str, top_k: int = 3):
     print("🔍 [Retrieve] Parallel search started...\n")
 
@@ -108,9 +92,7 @@ def retrieve_all_documents_parallel(question: str, top_k: int = 3):
         "all_docs": (web_docs or []) + (book_docs or []) + (video_docs or [])
     }
 
-
 # ==================== Graph Nodes ====================
-
 def route_question(state: GraphState) -> GraphState:
     print("🤖 [Router] Question routing...\n")
 
@@ -119,7 +101,6 @@ def route_question(state: GraphState) -> GraphState:
         "route": "internal",
         "iteration": 0
     }
-
 
 def retrieve_documents(state: GraphState) -> GraphState:
     print("🌐 [Retrieve] Integrated retrieval...\n")
@@ -136,72 +117,25 @@ def retrieve_documents(state: GraphState) -> GraphState:
         "documents": result["all_docs"]
     }
 
-
 def judge_documents(state: GraphState) -> GraphState:
     print("🤖 [Judge] Evaluating documents...\n")
 
     docs = state.get("documents", [])
 
     if not docs:
-        print("[Judge] No documents found → not_resolved\n")
+        print("[Judge] No documents → not_resolved\n")
         return {
             **state,
             "judgement": "not_resolved"
         }
 
-    joined_docs = "\n".join(
-        doc.get("content", "")[:500]
-        for doc in docs
-        if doc.get("content")
-    )
-
-    prompt = f"""
-사용자 질문에 대해 아래 문서들이 충분한 정보를 제공하는지 판단하세요.
-
-Question:
-{state["question"]}
-
-Documents:
-{joined_docs}
-
-반드시 JSON 형식으로만 응답하세요.
-
-예시:
-{{"judgement": "resolved"}}
-
-또는
-
-{{"judgement": "not_resolved"}}
-"""
-
-    res = client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ],
-        temperature=0
-    )
-
-    try:
-        content = res.choices[0].message.content
-        json_obj = json.loads(content[content.find("{"):])
-        judgement = json_obj.get(
-            "judgement",
-            "not_resolved"
-        )
-    except Exception:
-        judgement = "not_resolved"
-
-    print(f"[Judge] Result: {judgement}\n")
+    # 문서 하나라도 있으면 무조건 resolved
+    print("[Judge] Documents found → resolved\n")
 
     return {
         **state,
-        "judgement": judgement
+        "judgement": "resolved"
     }
-
 
 def rewrite_question(state: GraphState) -> GraphState:
     print("✍️ [Rewrite] Question rewriting...\n")
@@ -249,9 +183,7 @@ def rewrite_question(state: GraphState) -> GraphState:
         "iteration": iteration + 1
     }
 
-
 # ==================== Conditional Edge ====================
-
 def decide_to_rewrite(
     state: GraphState
 ) -> Literal["rewrite", "end"]:
@@ -266,9 +198,7 @@ def decide_to_rewrite(
     print("✅ [Decision] → Search completed\n")
     return "end"
 
-
 # ==================== Graph Build ====================
-
 def create_graph():
     workflow = StateGraph(GraphState)
 
@@ -297,39 +227,53 @@ def create_graph():
         checkpointer=MemorySaver()
     )
 
+def is_creation_question(question: str) -> bool:
+    res = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[
+            {
+                "role": "user",
+                "content": f"""
+다음 질문이 아래 중 하나라도 관련되면 true:
+
+- 성경
+- 창조
+- 진화
+- 생물 기원
+- 노아의 홍수
+(창조설계, 대홍수, 화석, 진화론, 기독교, 창조신앙, 천문학, 연대문제 등과 관련된 질문도 포함)
+
+조금이라도 관련 있으면 true로 판단해.
+
+질문:
+{question}
+
+true 또는 false만 출력.
+"""
+            }
+        ],
+        temperature=0
+    )
+
+    return "true" in res.choices[0].message.content.lower()
 
 # ==================== Final Generate ====================
-
 def generate(question: str, thread_id: str = "user_1"):
     print("\n" + "=" * 60)
     print("===== Integrated Search Started =====")
     print("=" * 60)
     print(f"💁‍♂️ Question: {question}\n")
 
+    if not is_creation_question(question):
+        return "창조과학 질문만 처리합니다.", {}
+    
     # Query normalization
-
     normalized_question = normalize_query(question)
 
     print(f"🔍 Normalized Query: {normalized_question}\n")
 
-    if CACHE_ENABLED:
-        # Exact Redis Cache 확인
-        cached = get_cached_answer(normalized_question)
-        if cached:
-            print("⚡ Exact Redis Cache Hit!\n")
-            return cached["answer"], cached["sources"]
-
-        # Semantic Cache 확인
-        semantic_cached = search_semantic_cache(question)
-        if semantic_cached:
-            print("⚡ Semantic Cache Hit!\n")
-            return (
-                semantic_cached["answer"],
-                semantic_cached["sources"]
-            )
-
     print("❌ Cache Miss → RAG 실행\n")
-
+    
     # LangGraph 실행
     graph = create_graph()
 
@@ -356,7 +300,7 @@ def generate(question: str, thread_id: str = "user_1"):
     history_text = format_chat_history(chat_history)
 
     if judgement == "not_resolved":
-        print("❌ 충분한 근거를 찾지 못함 → 답변 생성 중단\n")
+        print("[not_resolved] 충분한 근거를 찾지 못함 → 답변 생성 중단\n")
 
         return (
             "제공된 자료만으로는 충분히 신뢰할 수 있는 답변을 드리기 어렵습니다. "
@@ -429,38 +373,27 @@ def generate(question: str, thread_id: str = "user_1"):
 
     context = "\n".join(context_parts)
 
-    system_prompt = f"""당신은 기독교적 세계관과 창조과학(Creation Science)에 기반하여 답변하는 전문 어시스턴트 '비봇(BeBot)'입니다. 창조주 하나님에 대한 믿음을 전제로 하되, 과학적 증거와 성경적 근거를 함께 제시합니다.
+    system_prompt = f"""
+[Role & Identity]
+당신은 '성경적 창조론 가이드'입니다. 당신은 모든 사물과 생명이 하나님의 지혜와 설계에 의해 창조되었다는 확고한 기독교 세계관을 가지고 답변합니다. 사용자의 과학적, 신학적 질문에 대해 성경의 권위를 인정하며 창조과학적 관점에서 답변을 제공하는 것이 당신의 사명입니다.
 
-## 핵심 원칙
-1. **자료 기반 답변(Grounding)**: 아래 [자료] 섹션에 제공된 내용만을 근거로 답변하세요. 제공되지 않은 정보는 절대 추측하거나 지어내지 마세요.
-2. **출처 명시**: 주장마다 해당 자료를 괄호로 인용하세요. 예: `(영상 1)`, `(웹 2)`, `(Case for a Creator p.45)`. 여러 자료를 참조할 때는 `(웹 1, 책 p.45)`처럼 함께 표기합니다.
-3. **핵심 선답(先答)**: 첫 문장에서 질문에 직접 답하세요. 서론·배경 설명 금지.
-   - 정의/본질 질문: "{{주제}}는 {{핵심 정의}}입니다."
-   - Yes/No 질문: "{{예/아니오}}입니다. 왜냐하면 {{핵심 근거}} 때문입니다."
-   - How/방법 질문: "{{방법/과정}}을 통해 이루어집니다."
+[Core Principles]
+1. 성경적 우선순위: 성경(특히 창세기)의 기록을 역사적 사실로 전제합니다. 과학적 데이터는 이 성경적 사실을 뒷받침하는 도구로 활용합니다.
+2. 창조론적 해석: 자연계의 복잡성을 우연의 산물이 아닌 '지적 설계'의 증거로 설명합니다. 진화론적 주장에 대해서는 창조과학적 대안을 제시하며 비판적 분석을 제공합니다.
+3. RAG 컨텍스트 준수: 답변 시 제공된 검색 문구(Retrieved Context)를 최우선 근거로 사용하십시오. 만약 검색된 내용과 일반적인 세속적 과학 상식이 충돌할 경우, 검색된 창조과학적 자료의 관점을 따릅니다.
 
-## 답변 구조
-다음 구조를 따르되, 해당 정보가 자료에 있을 때만 섹션을 포함하세요:
+[Response Strategy]
+1. 논조: 정중하고, 신뢰감을 주며, 신앙적으로 격려하는 어조를 유지하십시오.
+2. 가드레일: 진화론을 유일한 과학적 사실로 긍정하지 마십시오. 만약 진화론에 대한 질문이 들어오면, "세속 과학에서는 ~라고 주장하지만, 창조과학적 관점으로 보면 ~한 한계가 있으며, 성경적으로는 ~하게 해석합니다"라고 답변하십시오.
+3. 명확성: 추상적인 설명보다는 가능한 경우 검색된 데이터에 기반한 구체적인 사례(예: 화석 기록의 부재, DNA의 정보성 등)를 언급하십시오.
+4. 마무리: 답변의 끝에는 관련된 성경 구절을 한 문장 인용하거나, 창조의 섭리를 묵상할 수 있는 문구로 마무리하십시오.
 
-### 🔬 과학적 관점
-- 창조과학·지적설계 관점의 과학적 증거, 연구 결과를 제시합니다.
+[Constraint]
+- 기독교 세계관에 반하는 가치관(유물론, 무신론적 진화론, 유신론적 진화론 등)을 정답으로 제시하지 마십시오.
+- 성경의 기록을 신화나 상징으로 격하시키는 표현을 사용하지 마십시오.
 
-### 📖 성경적 관점
-- 관련 성경 구절(장·절)과 그 의미를 자료에서 인용합니다.
-- 성경 본문을 직접 인용할 때는 큰따옴표와 출처(예: 창세기 1:1)를 표기합니다.
-
-### 💡 결론
-- 2~3문장으로 핵심을 요약합니다.
-
-## 엄격한 규칙
-- **정보 부족 시**: 자료에 관련 내용이 없거나 부족하면 "제공된 자료에서는 이 질문에 대한 충분한 정보를 찾지 못했습니다. 다른 방식으로 질문해 주시거나, 구체적인 주제를 알려주시면 더 잘 도와드릴 수 있습니다."라고 솔직히 답하세요. 추측 금지.
-- **관점 충돌 시**: 자료 간 다른 견해가 있으면 양쪽을 "자료 A에서는 …, 자료 B에서는 …"로 병기하고, 독자가 판단할 수 있도록 제시하세요.
-- **범위 밖 질문**: 창조과학·신앙·성경과 무관한 질문(일상 코드 작성, 오늘의 날씨 등)에는 "저는 창조과학과 기독교 세계관에 관한 질문에 답하도록 만들어진 어시스턴트입니다. 관련된 질문을 해주시면 도움을 드릴 수 있습니다."라고 정중히 안내하세요.
-- **톤**: 존중하고 겸손한 태도. 다른 관점을 가진 사람을 비난하거나 조롱하지 않습니다. 학문적·목회적 어조를 유지합니다.
-- **핵심 키워드**: 질문의 주요 키워드를 답변 전체에 자연스럽게 3회 이상 포함하여 검색·요약 품질을 높입니다.
-- **금지 사항**: 자료에 없는 수치·연도·인명·성경 구절을 만들어내지 마세요. 확신 없는 내용은 "자료에 따르면"으로 한정합니다.
-
-{lang_instruction}"""
+{lang_instruction}
+"""
 
     print("🤖 [Generate] 답변 생성 중...\n")
 
@@ -498,25 +431,21 @@ def generate(question: str, thread_id: str = "user_1"):
         "chat_history": updated_history
     }
 
-    if CACHE_ENABLED:
-        # Exact Redis Cache 저장
-        save_cached_answer(
-            normalized_question,
-            {
-                "answer": answer,
-                "sources": sources
-            }
-        )
+    save_cached_answer(
+        normalized_question,
+        {
+            "answer": answer,
+            "sources": sources
+        }
+    )
 
-        # Semantic Cache 저장
-        save_semantic_cache(
-            question,
-            {
-                "answer": answer,
-                "sources": sources
-            }
-        )
-
-        print("💾 Redis Cache Saved!\n")
+    save_semantic_cache(
+        question,
+        {
+            "answer": answer,
+            "sources": sources
+        }
+    )
+    print("💾 Redis Cache Saved!\n")
 
     return answer, sources
