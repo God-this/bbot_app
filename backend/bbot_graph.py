@@ -16,10 +16,14 @@ from bbot_web import retrieve_web_documents
 from bbot_book import retrieve_pages
 from bbot_video import retrieve_video_segments
 
-from redis_cache import save_cached_answer
+from redis_cache import get_cached_answer, save_cached_answer
 import re
 
-from redis_semantic_cache import save_semantic_cache
+from redis_semantic_cache import (
+    search_semantic_cache,
+    save_semantic_cache
+
+)
 
 client = get_client()
 
@@ -258,7 +262,8 @@ true 또는 false만 출력.
     return "true" in res.choices[0].message.content.lower()
 
 # ==================== Final Generate ====================
-def generate(question: str, thread_id: str = "user_1"):
+
+def generate(question: str, thread_id: str = "user_1", use_cache: bool = True):
     print("\n" + "=" * 60)
     print("===== Integrated Search Started =====")
     print("=" * 60)
@@ -271,6 +276,25 @@ def generate(question: str, thread_id: str = "user_1"):
     normalized_question = normalize_query(question)
 
     print(f"🔍 Normalized Query: {normalized_question}\n")
+
+    # Exact Redis Cache 확인
+    cached = get_cached_answer(normalized_question)
+
+    if use_cache and cached:
+        print("⚡ Exact Redis Cache Hit!\n")
+        return cached["answer"], cached["sources"]
+    if not use_cache:
+        print("🚫 Exact cache skipped (disabled)")
+
+    # Semantic Cache 확인
+    semantic_cached = search_semantic_cache(question)
+
+    if use_cache and semantic_cached:
+        print("⚡ Semantic Cache Hit!\n")
+        return semantic_cached["answer"], semantic_cached["sources"]
+
+    if not use_cache:
+        print("🚫 Semantic cache skipped (disabled)")
 
     print("❌ Cache Miss → RAG 실행\n")
     
@@ -300,7 +324,7 @@ def generate(question: str, thread_id: str = "user_1"):
     history_text = format_chat_history(chat_history)
 
     if judgement == "not_resolved":
-        print("[not_resolved] 충분한 근거를 찾지 못함 → 답변 생성 중단\n")
+        print("❌ 충분한 근거를 찾지 못함 → 답변 생성 중단\n")
 
         return (
             "제공된 자료만으로는 충분히 신뢰할 수 있는 답변을 드리기 어렵습니다. "
@@ -431,21 +455,27 @@ def generate(question: str, thread_id: str = "user_1"):
         "chat_history": updated_history
     }
 
-    save_cached_answer(
-        normalized_question,
-        {
-            "answer": answer,
-            "sources": sources
-        }
-    )
+    if use_cache:
+        # Exact Redis Cache 저장
+        save_cached_answer(
+            normalized_question,
+            {
+                "answer": answer,
+                "sources": sources
+            }
+        )
 
-    save_semantic_cache(
-        question,
-        {
-            "answer": answer,
-            "sources": sources
-        }
-    )
+        # Semantic Cache 저장
+        save_semantic_cache(
+            question,
+            {
+                "answer": answer,
+                "sources": sources
+            }
+        )
+    else:
+        print("🚫 Cache write skipped (disabled)")
+
     print("💾 Redis Cache Saved!\n")
 
     return answer, sources
