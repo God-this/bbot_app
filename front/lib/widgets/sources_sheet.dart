@@ -241,7 +241,17 @@ class _VideoSourceCardState extends State<_VideoSourceCard> {
         children: [
           // 영상 정보 + 재생 버튼
           InkWell(
-            onTap: _isPlayerVisible ? null : _initPlayer,
+            onTap: () {
+                if (_isPlayerVisible) {
+                  if (kIsWeb) {
+                    _webPlayerController?.pauseVideo();
+                  } else {
+                    _playerController?.pause();
+                  }
+                } else {
+                  _initPlayer();
+                }
+              },
             borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
             child: Padding(
               padding: const EdgeInsets.all(14),
