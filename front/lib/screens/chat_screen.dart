@@ -62,35 +62,48 @@ class _ChatScreenState extends State<ChatScreen> {
                   // 새 메시지 시 스크롤
                   _scrollToBottom();
 
-                  return ListView.builder(
+                  return Scrollbar(
                     controller: _scrollController,
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    itemCount: chat.messages.length,
-                    itemBuilder: (context, index) {
-                      final msg = chat.messages[index];
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 680),
+                        child: ScrollConfiguration(
+                          behavior: ScrollConfiguration.of(context)
+                              .copyWith(scrollbars: false),
+                          child: ListView.builder(
+                            controller: _scrollController,
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            itemCount: chat.messages.length,
+                            itemBuilder: (context, index) {
+                              final msg = chat.messages[index];
 
-                      // 날짜 구분선
-                      Widget? dateDivider;
-                      if (index == 0 ||
-                          !_isSameDay(
-                            chat.messages[index - 1].timestamp,
-                            msg.timestamp,
-                          )) {
-                        dateDivider = _DateDivider(date: msg.timestamp);
-                      }
+                              // 날짜 구분선
+                              Widget? dateDivider;
+                              if (index == 0 ||
+                                  !_isSameDay(
+                                    chat.messages[index - 1].timestamp,
+                                    msg.timestamp,
+                                  )) {
+                                dateDivider = _DateDivider(date: msg.timestamp);
+                              }
 
-                      return Column(
-                        children: [
-                          if (dateDivider != null) dateDivider,
-                          ChatBubble(
-                            message: msg,
-                            onSourcesTap: msg.sources != null
-                                ? () => SourcesSheet.show(context, msg.sources!)
-                                : null,
+                              return Column(
+                                children: [
+                                  if (dateDivider != null) dateDivider,
+                                  ChatBubble(
+                                    message: msg,
+                                    onSourcesTap: msg.sources != null
+                                        ? () => SourcesSheet.show(
+                                            context, msg.sources!)
+                                        : null,
+                                  ),
+                                ],
+                              );
+                            },
                           ),
-                        ],
-                      );
-                    },
+                        ),
+                      ),
+                    ),
                   );
                 },
               ),
@@ -136,8 +149,7 @@ class _ChatScreenState extends State<ChatScreen> {
               hintText: '비밀번호를 입력하세요',
               suffixIcon: IconButton(
                 icon: Icon(obscure ? Icons.visibility_off : Icons.visibility),
-                onPressed: () =>
-                    setDialogState(() => obscure = !obscure),
+                onPressed: () => setDialogState(() => obscure = !obscure),
               ),
             ),
             onSubmitted: (_) => _tryAdminLogin(dialogContext, controller.text),
@@ -148,8 +160,7 @@ class _ChatScreenState extends State<ChatScreen> {
               child: const Text('취소'),
             ),
             TextButton(
-              onPressed: () =>
-                  _tryAdminLogin(dialogContext, controller.text),
+              onPressed: () => _tryAdminLogin(dialogContext, controller.text),
               child: const Text(
                 '확인',
                 style: TextStyle(color: AppColors.primary),

@@ -56,9 +56,12 @@ class _ChatInputBarState extends State<ChatInputBar> {
           top: BorderSide(color: AppColors.divider.withOpacity(0.5)),
         ),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 680),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
           // 텍스트 입력
           Expanded(
             child: Container(
@@ -112,7 +115,9 @@ class _ChatInputBarState extends State<ChatInputBar> {
               ),
             ),
           ),
-        ],
+            ],
+          ),
+        ),
       ),
     );
   }

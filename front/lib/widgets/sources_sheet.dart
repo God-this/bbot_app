@@ -25,7 +25,7 @@ class SourcesSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DraggableScrollableSheet(
-      initialChildSize: 0.65,
+      initialChildSize: 0.9,
       minChildSize: 0.3,
       maxChildSize: 0.92,
       builder: (_, scrollController) {
@@ -242,16 +242,16 @@ class _VideoSourceCardState extends State<_VideoSourceCard> {
           // 영상 정보 + 재생 버튼
           InkWell(
             onTap: () {
-                if (_isPlayerVisible) {
-                  if (kIsWeb) {
-                    _webPlayerController?.pauseVideo();
-                  } else {
-                    _playerController?.pause();
-                  }
+              if (_isPlayerVisible) {
+                if (kIsWeb) {
+                  _webPlayerController?.pauseVideo();
                 } else {
-                  _initPlayer();
+                  _playerController?.pause();
                 }
-              },
+              } else {
+                _initPlayer();
+              }
+            },
             borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
             child: Padding(
               padding: const EdgeInsets.all(14),
@@ -359,8 +359,8 @@ class _VideoSourceCardState extends State<_VideoSourceCard> {
                     ),
                   ),
                   builder: (context, player) => ClipRRect(
-                    borderRadius:
-                        const BorderRadius.vertical(bottom: Radius.circular(16)),
+                    borderRadius: const BorderRadius.vertical(
+                        bottom: Radius.circular(16)),
                     child: player,
                   ),
                 ),
