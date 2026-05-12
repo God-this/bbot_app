@@ -1,7 +1,9 @@
 // 출처 상세 바텀 시트 (영상 재생 포함)
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:youtube_player_flutter/youtube_player_flutter.dart';
+import 'package:youtube_player_iframe/youtube_player_iframe.dart' as yti;
 import '../theme.dart';
 import '../models/chat_models.dart';
 
@@ -165,6 +167,7 @@ class _VideoSourceCard extends StatefulWidget {
 
 class _VideoSourceCardState extends State<_VideoSourceCard> {
   YoutubePlayerController? _playerController;
+  yti.YoutubePlayerController? _webPlayerController;
   bool _isPlayerVisible = false;
   // 에러 101/150: 임베드 비허용, 100: 영상 없음, 5: HTML5 오류
   bool _embedBlocked = false;
@@ -172,6 +175,17 @@ class _VideoSourceCardState extends State<_VideoSourceCard> {
   void _initPlayer() {
     final ytId = widget.source.youtubeId ?? '';
     if (ytId.isEmpty) return;
+
+    if (kIsWeb) {
+      _webPlayerController = yti.YoutubePlayerController.fromVideoId(
+        videoId: ytId,
+        autoPlay: true,
+        startSeconds: widget.source.startTime,
+        params: const yti.YoutubePlayerParams(showFullscreenButton: true),
+      );
+      setState(() => _isPlayerVisible = true);
+      return;
+    }
 
     _playerController = YoutubePlayerController(
       initialVideoId: ytId,
@@ -209,6 +223,7 @@ class _VideoSourceCardState extends State<_VideoSourceCard> {
   void dispose() {
     _playerController?.removeListener(_onPlayerStateChange);
     _playerController?.dispose();
+    _webPlayerController?.close();
     super.dispose();
   }
 
@@ -308,24 +323,38 @@ class _VideoSourceCardState extends State<_VideoSourceCard> {
             ),
 
           // 인앱 YouTube 플레이어
-          // YoutubePlayerBuilder로 감싸야 ListView 내 PlatformView가 정상 렌더링됨
-          if (_isPlayerVisible && !_embedBlocked && _playerController != null)
-            YoutubePlayerBuilder(
-              player: YoutubePlayer(
-                controller: _playerController!,
-                showVideoProgressIndicator: true,
-                progressIndicatorColor: AppColors.videoBadge,
-                progressColors: const ProgressBarColors(
-                  playedColor: AppColors.videoBadge,
-                  handleColor: AppColors.videoBadge,
-                ),
-              ),
-              builder: (context, player) => ClipRRect(
+          if (_isPlayerVisible && !_embedBlocked)
+            if (kIsWeb && _webPlayerController != null)
+              // 웹: iframe 기반 플레이어 (16:9 비율 보장)
+              ClipRRect(
                 borderRadius:
                     const BorderRadius.vertical(bottom: Radius.circular(16)),
-                child: player,
+                child: yti.YoutubePlayer(
+                  controller: _webPlayerController!,
+                  aspectRatio: 16 / 9,
+                ),
+              )
+            else if (!kIsWeb && _playerController != null)
+              // 모바일: YoutubePlayerBuilder로 감싸야 ListView 내 PlatformView가 정상 렌더링됨
+              AspectRatio(
+                aspectRatio: 16 / 9,
+                child: YoutubePlayerBuilder(
+                  player: YoutubePlayer(
+                    controller: _playerController!,
+                    showVideoProgressIndicator: true,
+                    progressIndicatorColor: AppColors.videoBadge,
+                    progressColors: const ProgressBarColors(
+                      playedColor: AppColors.videoBadge,
+                      handleColor: AppColors.videoBadge,
+                    ),
+                  ),
+                  builder: (context, player) => ClipRRect(
+                    borderRadius:
+                        const BorderRadius.vertical(bottom: Radius.circular(16)),
+                    child: player,
+                  ),
+                ),
               ),
-            ),
 
           // 스니펫
           if (widget.source.snippet.isNotEmpty && !_isPlayerVisible)

@@ -27,6 +27,7 @@ dependencies:
   
   # Video Player
   youtube_player_flutter: ^9.0.3
+  youtube_player_iframe: ^5.2.2
   
   # Icons
   cupertino_icons: ^1.0.6
