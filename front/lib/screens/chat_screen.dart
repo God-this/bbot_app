@@ -76,32 +76,32 @@ class _ChatScreenState extends State<ChatScreen> {
 
                           return Scrollbar(
                             controller: _scrollController,
-                            child: Center(
-                              child: ConstrainedBox(
-                                constraints:
-                                    const BoxConstraints(maxWidth: 680),
-                                child: ScrollConfiguration(
-                                  behavior: ScrollConfiguration.of(context)
-                                      .copyWith(scrollbars: false),
-                                  child: ListView.builder(
-                                    controller: _scrollController,
-                                    padding: const EdgeInsets.symmetric(
-                                        vertical: 16),
-                                    itemCount: chat.messages.length,
-                                    itemBuilder: (context, index) {
-                                      final msg = chat.messages[index];
+                            child: ScrollConfiguration(
+                              behavior: ScrollConfiguration.of(context)
+                                  .copyWith(scrollbars: false),
+                              child: ListView.builder(
+                                controller: _scrollController,
+                                padding: const EdgeInsets.symmetric(
+                                    vertical: 16),
+                                itemCount: chat.messages.length,
+                                itemBuilder: (context, index) {
+                                  final msg = chat.messages[index];
 
-                                      Widget? dateDivider;
-                                      if (index == 0 ||
-                                          !_isSameDay(
-                                            chat.messages[index - 1].timestamp,
-                                            msg.timestamp,
-                                          )) {
-                                        dateDivider =
-                                            _DateDivider(date: msg.timestamp);
-                                      }
+                                  Widget? dateDivider;
+                                  if (index == 0 ||
+                                      !_isSameDay(
+                                        chat.messages[index - 1].timestamp,
+                                        msg.timestamp,
+                                      )) {
+                                    dateDivider =
+                                        _DateDivider(date: msg.timestamp);
+                                  }
 
-                                      return Column(
+                                  return Center(
+                                    child: ConstrainedBox(
+                                      constraints:
+                                          const BoxConstraints(maxWidth: 680),
+                                      child: Column(
                                         children: [
                                           if (dateDivider != null) dateDivider,
                                           ChatBubble(
@@ -112,10 +112,10 @@ class _ChatScreenState extends State<ChatScreen> {
                                                 : null,
                                           ),
                                         ],
-                                      );
-                                    },
-                                  ),
-                                ),
+                                      ),
+                                    ),
+                                  );
+                                },
                               ),
                             ),
                           );
