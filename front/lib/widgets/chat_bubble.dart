@@ -94,7 +94,8 @@ class _BotBubble extends StatelessWidget {
           const SizedBox(width: 10),
 
           // 메시지 본문
-          ConstrainedBox(
+          Flexible(
+           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 560),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -148,6 +149,7 @@ class _BotBubble extends StatelessWidget {
                   ),
               ],
             ),
+           ),
           ),
         ],
       ),
