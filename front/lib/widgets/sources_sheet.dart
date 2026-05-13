@@ -46,79 +46,123 @@ class SourcesSheet extends StatelessWidget {
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
-
-              // 헤더
-              Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                child: Row(
-                  children: [
-                    const Icon(Icons.format_quote_rounded,
-                        color: AppColors.primary, size: 22),
-                    const SizedBox(width: 8),
-                    Text(
-                      '출처 정보',
-                      style:
-                          Theme.of(context).textTheme.headlineMedium?.copyWith(
-                                fontSize: 18,
-                              ),
-                    ),
-                    const Spacer(),
-                    Text(
-                      '총 ${sources.totalCount}건',
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                  ],
-                ),
-              ),
-              const Divider(height: 1, color: AppColors.divider),
-
-              // 출처 목록
               Expanded(
-                child: ListView(
-                  controller: scrollController,
-                  padding: const EdgeInsets.all(16),
-                  children: [
-                    // 영상 출처
-                    if (sources.videoSources.isNotEmpty) ...[
-                      const _SectionHeader(
-                          icon: Icons.video_camera_back,
-                          label: '영상 자료',
-                          color: AppColors.videoBadge),
-                      ...sources.videoSources
-                          .map((v) => _VideoSourceCard(source: v)),
-                      const SizedBox(height: 20),
-                    ],
-
-                    // 웹 출처
-                    if (sources.webSources.isNotEmpty) ...[
-                      const _SectionHeader(
-                          icon: Icons.language_rounded,
-                          label: '웹사이트 자료',
-                          color: AppColors.webBadge),
-                      ...sources.webSources
-                          .map((w) => _WebSourceCard(source: w)),
-                      const SizedBox(height: 20),
-                    ],
-
-                    // 책 출처
-                    if (sources.bookSources.isNotEmpty) ...[
-                      const _SectionHeader(
-                          icon: Icons.menu_book_rounded,
-                          label: '책 자료',
-                          color: AppColors.bookBadge),
-                      ...sources.bookSources
-                          .map((b) => _BookSourceCard(source: b)),
-                    ],
-
-                    const SizedBox(height: 40),
-                  ],
+                child: _SourcesBody(
+                  sources: sources,
+                  scrollController: scrollController,
                 ),
               ),
             ],
           ),
         );
       },
+    );
+  }
+}
+
+/// 넓은 화면(웹 등)에서 오른쪽에 표시되는 출처 사이드 패널
+class SourcesSidePanel extends StatelessWidget {
+  final SourceInfo sources;
+  final VoidCallback onClose;
+
+  const SourcesSidePanel({
+    super.key,
+    required this.sources,
+    required this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: AppColors.background,
+        border: Border(left: BorderSide(color: AppColors.divider)),
+      ),
+      child: _SourcesBody(sources: sources, onClose: onClose),
+    );
+  }
+}
+
+// ─── 공유 콘텐츠 (헤더 + 목록) ────────────────────────────
+class _SourcesBody extends StatelessWidget {
+  final SourceInfo sources;
+  final ScrollController? scrollController;
+  final VoidCallback? onClose;
+
+  const _SourcesBody({
+    required this.sources,
+    this.scrollController,
+    this.onClose,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+          child: Row(
+            children: [
+              const Icon(Icons.format_quote_rounded,
+                  color: AppColors.primary, size: 22),
+              const SizedBox(width: 8),
+              Text(
+                '출처 정보',
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                      fontSize: 18,
+                    ),
+              ),
+              const Spacer(),
+              Text(
+                '총 ${sources.totalCount}건',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              if (onClose != null) ...[
+                const SizedBox(width: 4),
+                IconButton(
+                  icon: const Icon(Icons.close_rounded, size: 20),
+                  onPressed: onClose,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
+              ],
+            ],
+          ),
+        ),
+        const Divider(height: 1, color: AppColors.divider),
+        Expanded(
+          child: ListView(
+            controller: scrollController,
+            padding: const EdgeInsets.all(16),
+            children: [
+              if (sources.videoSources.isNotEmpty) ...[
+                const _SectionHeader(
+                    icon: Icons.video_camera_back,
+                    label: '영상 자료',
+                    color: AppColors.videoBadge),
+                ...sources.videoSources.map((v) => _VideoSourceCard(source: v)),
+                const SizedBox(height: 20),
+              ],
+              if (sources.webSources.isNotEmpty) ...[
+                const _SectionHeader(
+                    icon: Icons.language_rounded,
+                    label: '웹사이트 자료',
+                    color: AppColors.webBadge),
+                ...sources.webSources.map((w) => _WebSourceCard(source: w)),
+                const SizedBox(height: 20),
+              ],
+              if (sources.bookSources.isNotEmpty) ...[
+                const _SectionHeader(
+                    icon: Icons.menu_book_rounded,
+                    label: '책 자료',
+                    color: AppColors.bookBadge),
+                ...sources.bookSources.map((b) => _BookSourceCard(source: b)),
+              ],
+              const SizedBox(height: 40),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

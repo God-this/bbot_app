@@ -1,6 +1,7 @@
 // 메인 채팅 화면
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../models/chat_models.dart';
 import '../theme.dart';
 import '../services/chat_provider.dart';
 import '../widgets/welcome_view.dart';
@@ -17,11 +18,20 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final _scrollController = ScrollController();
+  SourceInfo? _selectedSources;
 
   @override
   void dispose() {
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _handleSourcesTap(BuildContext context, SourceInfo sources) {
+    if (MediaQuery.of(context).size.width >= 700) {
+      setState(() => _selectedSources = sources);
+    } else {
+      SourcesSheet.show(context, sources);
+    }
   }
 
   void _scrollToBottom() {
@@ -40,89 +50,104 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: _buildAppBar(context),
-      body: SafeArea(
-        bottom: false,
-        child: Column(
-          children: [
-            // 채팅 영역
-            Expanded(
-              child: Consumer<ChatProvider>(
-                builder: (context, chat, _) {
-                  if (!chat.hasMessages) {
-                    return WelcomeView(
-                      suggestions: chat.suggestedQuestions,
-                      onSuggestionTap: (text) {
-                        // 줄바꿈 제거하여 전송
-                        chat.sendMessage(text.replaceAll('\n', ' '));
-                        _scrollToBottom();
-                      },
-                    );
-                  }
+      body: Consumer<ChatProvider>(
+        builder: (context, chat, _) {
+          return SafeArea(
+            bottom: false,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    children: [
+                      // 채팅 영역
+                      Expanded(
+                        child: Builder(builder: (context) {
+                          if (!chat.hasMessages) {
+                            return WelcomeView(
+                              suggestions: chat.suggestedQuestions,
+                              onSuggestionTap: (text) {
+                                chat.sendMessage(text.replaceAll('\n', ' '));
+                                _scrollToBottom();
+                              },
+                            );
+                          }
 
-                  // 새 메시지 시 스크롤
-                  _scrollToBottom();
+                          _scrollToBottom();
 
-                  return Scrollbar(
-                    controller: _scrollController,
-                    child: Center(
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 680),
-                        child: ScrollConfiguration(
-                          behavior: ScrollConfiguration.of(context)
-                              .copyWith(scrollbars: false),
-                          child: ListView.builder(
+                          return Scrollbar(
                             controller: _scrollController,
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            itemCount: chat.messages.length,
-                            itemBuilder: (context, index) {
-                              final msg = chat.messages[index];
+                            child: Center(
+                              child: ConstrainedBox(
+                                constraints:
+                                    const BoxConstraints(maxWidth: 680),
+                                child: ScrollConfiguration(
+                                  behavior: ScrollConfiguration.of(context)
+                                      .copyWith(scrollbars: false),
+                                  child: ListView.builder(
+                                    controller: _scrollController,
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 16),
+                                    itemCount: chat.messages.length,
+                                    itemBuilder: (context, index) {
+                                      final msg = chat.messages[index];
 
-                              // 날짜 구분선
-                              Widget? dateDivider;
-                              if (index == 0 ||
-                                  !_isSameDay(
-                                    chat.messages[index - 1].timestamp,
-                                    msg.timestamp,
-                                  )) {
-                                dateDivider = _DateDivider(date: msg.timestamp);
-                              }
+                                      Widget? dateDivider;
+                                      if (index == 0 ||
+                                          !_isSameDay(
+                                            chat.messages[index - 1].timestamp,
+                                            msg.timestamp,
+                                          )) {
+                                        dateDivider =
+                                            _DateDivider(date: msg.timestamp);
+                                      }
 
-                              return Column(
-                                children: [
-                                  if (dateDivider != null) dateDivider,
-                                  ChatBubble(
-                                    message: msg,
-                                    onSourcesTap: msg.sources != null
-                                        ? () => SourcesSheet.show(
-                                            context, msg.sources!)
-                                        : null,
+                                      return Column(
+                                        children: [
+                                          if (dateDivider != null) dateDivider,
+                                          ChatBubble(
+                                            message: msg,
+                                            onSourcesTap: msg.sources != null
+                                                ? () => _handleSourcesTap(
+                                                    context, msg.sources!)
+                                                : null,
+                                          ),
+                                        ],
+                                      );
+                                    },
                                   ),
-                                ],
-                              );
-                            },
-                          ),
-                        ),
+                                ),
+                              ),
+                            ),
+                          );
+                        }),
                       ),
-                    ),
-                  );
-                },
-              ),
-            ),
 
-            // 입력 바
-            Consumer<ChatProvider>(
-              builder: (context, chat, _) {
-                return ChatInputBar(
-                  isLoading: chat.isTyping,
-                  onSend: (text) {
-                    chat.sendMessage(text);
-                    _scrollToBottom();
-                  },
-                );
-              },
+                      // 입력 바
+                      ChatInputBar(
+                        isLoading: chat.isTyping,
+                        onSend: (text) {
+                          chat.sendMessage(text);
+                          _scrollToBottom();
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+
+                // 사이드 패널 (너비 700px 이상 + 출처 선택 시, 채팅과 50:50)
+                if (_selectedSources != null &&
+                    chat.hasMessages &&
+                    MediaQuery.of(context).size.width >= 700)
+                  Expanded(
+                    child: SourcesSidePanel(
+                      sources: _selectedSources!,
+                      onClose: () => setState(() => _selectedSources = null),
+                    ),
+                  ),
+              ],
             ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
