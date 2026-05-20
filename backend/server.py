@@ -94,7 +94,8 @@ class SourceDoc(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     sources: dict          # { web_docs: [...], book_docs: [...], video_docs: [...] }
-
+    top_sources: list      # 관련성 상위 3개 (score 기준, UI 표시용)
+    images: list[str] = []
 
 # ──────── 엔드포인트 ────────
 @app.get("/api/health")
@@ -124,7 +125,13 @@ async def chat(req: ChatRequest):
             "video_docs": raw.get("video_docs", []),
         }
 
-        return ChatResponse(answer=answer, sources=sources)
+        image_urls = []
+        for doc in sources["book_docs"]:
+            image_urls.extend(doc.get("images", []))
+
+        top_sources = raw.get("top_sources", [])
+
+        return ChatResponse(answer=answer, sources=sources, top_sources=top_sources, images=image_urls)
 
     except Exception as e:
         print(f"❌ 답변 생성 오류: {e}")

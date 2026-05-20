@@ -83,12 +83,14 @@ class BookSource {
   final int page;
   final String snippet;
   final double score;
+  final List<String> images;
 
   BookSource({
     required this.bookName,
     required this.page,
     this.snippet = '',
     this.score = 0.0,
+    this.images = const [],
   });
 
   factory BookSource.fromMap(Map<String, dynamic> map) {
@@ -99,6 +101,7 @@ class BookSource {
           ? '${(map['content'] ?? '').toString().substring(0, 150)}...'
           : map['content'] ?? '',
       score: (map['score'] ?? 0).toDouble(),
+      images: List<String>.from(map['images'] ?? []),
     );
   }
 }

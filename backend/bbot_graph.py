@@ -373,13 +373,19 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
 
     for doc in all_docs:
         if "start" in doc and "end" in doc:
+            doc.setdefault("type", "video")
             video_docs.append(doc)
-
         elif "book" in doc:
+            doc.setdefault("type", "book")
             book_docs.append(doc)
-
         elif "url" in doc:
+            doc.setdefault("type", "web")
             web_docs.append(doc)
+
+    # images 확인 로그
+    for doc in book_docs:
+        imgs = doc.get("images", [])
+        print(f"📘 [{doc.get('book')} p{doc.get('page')}] 이미지 {len(imgs)}개: {imgs}")
 
     lang_instruction = (
         "한국어로 답변하세요."
@@ -481,7 +487,8 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
         "video_docs": video_docs,
         "web_docs": web_docs,
         "book_docs": book_docs,
-        "chat_history": updated_history
+        "chat_history": updated_history,
+        "top_sources": all_docs,
     }
 
     if use_cache:

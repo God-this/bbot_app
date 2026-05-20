@@ -3,6 +3,7 @@ from llm_factory import get_embedding
 
 embedding_model = get_embedding()
 
+BASE_URL = "http://127.0.0.1:8000"
 
 def retrieve_pages(question: str, top_k: int = 5):
     print(f"\n🔎 [Book] 질문: {question}")

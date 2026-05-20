@@ -95,61 +95,65 @@ class _BotBubble extends StatelessWidget {
 
           // 메시지 본문
           Flexible(
-           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 560),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // 로딩 상태
-                if (message.isLoading) _buildLoadingIndicator(context),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // 로딩 상태
+                  if (message.isLoading) _buildLoadingIndicator(context),
 
-                // 답변 텍스트
-                if (!message.isLoading && message.content.isNotEmpty)
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 14),
-                    decoration: const BoxDecoration(
-                      color: AppColors.botBubble,
-                      borderRadius: BorderRadius.only(
-                        topLeft: Radius.circular(6),
-                        topRight: Radius.circular(20),
-                        bottomLeft: Radius.circular(20),
-                        bottomRight: Radius.circular(20),
+                  // 답변 텍스트
+                  if (!message.isLoading && message.content.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 14),
+                      decoration: const BoxDecoration(
+                        color: AppColors.botBubble,
+                        borderRadius: BorderRadius.only(
+                          topLeft: Radius.circular(6),
+                          topRight: Radius.circular(20),
+                          bottomLeft: Radius.circular(20),
+                          bottomRight: Radius.circular(20),
+                        ),
+                      ),
+                      child: MarkdownBody(
+                        data: message.content,
+                        styleSheet: MarkdownStyleSheet(
+                          p: Theme.of(context)
+                              .textTheme
+                              .bodyLarge
+                              ?.copyWith(height: 1.7),
+                          h2: Theme.of(context)
+                              .textTheme
+                              .headlineMedium
+                              ?.copyWith(fontSize: 17),
+                          h3: Theme.of(context)
+                              .textTheme
+                              .headlineMedium
+                              ?.copyWith(fontSize: 15),
+                          listBullet: Theme.of(context).textTheme.bodyLarge,
+                          blockSpacing: 12,
+                        ),
+                        selectable: true,
                       ),
                     ),
-                    child: MarkdownBody(
-                      data: message.content,
-                      styleSheet: MarkdownStyleSheet(
-                        p: Theme.of(context)
-                            .textTheme
-                            .bodyLarge
-                            ?.copyWith(height: 1.7),
-                        h2: Theme.of(context)
-                            .textTheme
-                            .headlineMedium
-                            ?.copyWith(fontSize: 17),
-                        h3: Theme.of(context)
-                            .textTheme
-                            .headlineMedium
-                            ?.copyWith(fontSize: 15),
-                        listBullet: Theme.of(context).textTheme.bodyLarge,
-                        blockSpacing: 12,
-                      ),
-                      selectable: true,
-                    ),
-                  ),
 
-                // 출처 버튼
-                if (!message.isLoading &&
-                    message.sources != null &&
-                    !message.sources!.isEmpty)
-                  _SourceBadge(
-                    sources: message.sources!,
-                    onTap: onSourcesTap,
-                  ),
-              ],
+                  // ↓ 책 이미지 섹션 추가
+                  if (!message.isLoading && message.sources != null)
+                    _BookImagesSection(sources: message.sources!),
+
+                  // 출처 버튼
+                  if (!message.isLoading &&
+                      message.sources != null &&
+                      !message.sources!.isEmpty)
+                    _SourceBadge(
+                      sources: message.sources!,
+                      onTap: onSourcesTap,
+                    ),
+                ],
+              ),
             ),
-           ),
           ),
         ],
       ),
@@ -311,6 +315,108 @@ class _TypingDotState extends State<_TypingDot>
           color: AppColors.primary.withOpacity(0.3 + _animation.value * 0.5),
           shape: BoxShape.circle,
         ),
+      ),
+    );
+  }
+}
+
+// ─── 책 이미지 섹션 ───────────────────────────────────
+class _BookImagesSection extends StatelessWidget {
+  final SourceInfo sources;
+  const _BookImagesSection({required this.sources});
+
+  @override
+  Widget build(BuildContext context) {
+    final allImages = sources.bookSources.expand((b) => b.images).toList();
+
+    if (allImages.isEmpty) return const SizedBox.shrink();
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Text(
+              '📖 관련 이미지',
+              style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                    color: AppColors.textTertiary,
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+          ),
+          SizedBox(
+            height: 300,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: allImages.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (context, i) {
+                return GestureDetector(
+                  onTap: () {
+                    showDialog(
+                      context: context,
+                      builder: (_) => Dialog(
+                        backgroundColor: Colors.black,
+                        insetPadding: EdgeInsets.zero,
+                        child: Stack(
+                          children: [
+                            Center(
+                              child: InteractiveViewer(
+                                child: Image.network(
+                                  allImages[i],
+                                  fit: BoxFit.contain,
+                                ),
+                              ),
+                            ),
+                            Positioned(
+                              top: 40,
+                              right: 16,
+                              child: IconButton(
+                                icon: const Icon(Icons.close,
+                                    color: Colors.white, size: 28),
+                                onPressed: () => Navigator.of(context).pop(),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: Image.network(
+                      allImages[i],
+                      height: 300,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => Container(
+                        width: 120,
+                        height: 300,
+                        color: AppColors.surface,
+                        child: const Icon(
+                          Icons.broken_image_outlined,
+                          color: AppColors.textTertiary,
+                        ),
+                      ),
+                      loadingBuilder: (context, child, progress) {
+                        if (progress == null) return child;
+                        return Container(
+                          width: 120,
+                          height: 300,
+                          color: AppColors.surface,
+                          child: const Center(
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
