@@ -19,10 +19,15 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 
 app = FastAPI(title="BeBot API", version="1.0.0")
+
+_images_dir = Path(__file__).parent / "extracted_images"
+if _images_dir.exists():
+    app.mount("/images", StaticFiles(directory=str(_images_dir)), name="images")
 
 # 영상 상태 캐시 
 _video_status_cache: dict = {"data": None, "checked_at": None}

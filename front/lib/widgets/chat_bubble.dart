@@ -360,26 +360,33 @@ class _BookImagesSection extends StatelessWidget {
                       builder: (_) => Dialog(
                         backgroundColor: Colors.black,
                         insetPadding: EdgeInsets.zero,
-                        child: Stack(
-                          children: [
-                            Center(
-                              child: InteractiveViewer(
-                                child: Image.network(
-                                  allImages[i],
-                                  fit: BoxFit.contain,
+                        child: SizedBox.expand(
+                          child: Stack(
+                            children: [
+                              InteractiveViewer(
+                                maxScale: 5.0,
+                                minScale: 0.5,
+                                boundaryMargin:
+                                    const EdgeInsets.all(double.infinity),
+                                child: Center(
+                                  child: Image.network(
+                                    allImages[i],
+                                    fit: BoxFit.contain,
+                                  ),
                                 ),
                               ),
-                            ),
-                            Positioned(
-                              top: 40,
-                              right: 16,
-                              child: IconButton(
-                                icon: const Icon(Icons.close,
-                                    color: Colors.white, size: 28),
-                                onPressed: () => Navigator.of(context).pop(),
+                              Positioned(
+                                top: 40,
+                                right: 16,
+                                child: IconButton(
+                                  icon: const Icon(Icons.close,
+                                      color: Colors.white, size: 28),
+                                  onPressed: () =>
+                                      Navigator.of(context).pop(),
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     );

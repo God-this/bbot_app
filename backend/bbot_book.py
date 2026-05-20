@@ -1,9 +1,13 @@
+import os
 from config import get_conn
 from llm_factory import get_embedding
 
 embedding_model = get_embedding()
 
 BASE_URL = "http://127.0.0.1:8000"
+
+def _to_image_url(file_path: str) -> str:
+    return f"{BASE_URL}/images/{os.path.basename(file_path)}"
 
 def retrieve_pages(question: str, top_k: int = 5):
     print(f"\n🔎 [Book] 질문: {question}")
@@ -48,6 +52,6 @@ def retrieve_pages(question: str, top_k: int = 5):
             "content": content,
             "score": float(score),
             "type": "book",
-            "images": images or []
+            "images": [_to_image_url(p) for p in images] if images else []
         })
     return results

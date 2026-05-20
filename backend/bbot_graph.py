@@ -93,39 +93,47 @@ def rerank_documents(question: str, docs: list[dict], top_k: int = 5) -> list[di
     return ranked
 
 # ==================== Parallel Retrieval ====================
-def retrieve_all_documents_parallel(question: str, top_k: int = 5):
-    print("🔍 [Retrieve] Parallel search started...\n")
+def deduplicate_docs(docs: list[dict]) -> list[dict]:
+    seen = set()
+    result = []
+    for doc in docs:
+        key = doc.get("url") or doc.get("title", "") + str(doc.get("page", "")) + str(doc.get("start", ""))
+        if key not in seen:
+            seen.add(key)
+            result.append(doc)
+    return result
 
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        future_web = executor.submit(
-            retrieve_web_documents,
-            question,
-            top_k
-        )
+def retrieve_all_documents_parallel(queries: list[str], top_k: int = 5):
+    print(f"🔍 [Retrieve] Parallel search started with {len(queries)} queries...\n")
 
-        future_book = executor.submit(
-            retrieve_pages,
-            question,
-            top_k
-        )
+    futures = []
+    with ThreadPoolExecutor(max_workers=9) as executor:
+        for q in queries:
+            futures.append(("web",   executor.submit(retrieve_web_documents, q, top_k)))
+            futures.append(("book",  executor.submit(retrieve_pages, q, top_k)))
+            futures.append(("video", executor.submit(retrieve_video_segments, q, top_k)))
 
-        future_video = executor.submit(
-            retrieve_video_segments,
-            question,
-            top_k
-        )
+        web_docs, book_docs, video_docs = [], [], []
+        for kind, future in futures:
+            docs = future.result() or []
+            if kind == "web":
+                web_docs.extend(docs)
+            elif kind == "book":
+                book_docs.extend(docs)
+            elif kind == "video":
+                video_docs.extend(docs)
 
-        web_docs = future_web.result()
-        book_docs = future_book.result()
-        video_docs = future_video.result()
+    web_docs   = deduplicate_docs(web_docs)
+    book_docs  = deduplicate_docs(book_docs)
+    video_docs = deduplicate_docs(video_docs)
 
     print("✅ Parallel search completed\n")
 
     return {
-        "web_docs": web_docs or [],
-        "book_docs": book_docs or [],
-        "video_docs": video_docs or [],
-        "all_docs": (web_docs or []) + (book_docs or []) + (video_docs or [])
+        "web_docs": web_docs,
+        "book_docs": book_docs,
+        "video_docs": video_docs,
+        "all_docs": web_docs + book_docs + video_docs
     }
 
 # ==================== Graph Nodes ====================
@@ -144,8 +152,11 @@ def retrieve_documents(state: GraphState) -> GraphState:
     query = state.get("rewritten_question") or state["question"]
     english_query = translate_to_english(query)
 
+    queries = [query] if query == english_query else [query, english_query]
+    print(f"🔎 검색 쿼리: {queries}\n")
+
     result = retrieve_all_documents_parallel(
-        english_query,
+        queries,
         top_k=5
     )
 
