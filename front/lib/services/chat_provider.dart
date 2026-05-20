@@ -20,10 +20,10 @@ class ChatProvider extends ChangeNotifier {
 
   /// 추천 질문 리스트
   List<SuggestedQuestion> get suggestedQuestions => [
-        SuggestedQuestion(text: '성경은 어디에서 왔으며,\n정말 하나님의 말씀인가요?'),
-        SuggestedQuestion(text: '공룡이 실제로 존재했나요?'),
+        SuggestedQuestion(text: '방주에서 살아남은 공룡, \n왜 결국 멸종되었을까?'),
+        SuggestedQuestion(text: '핀치새 부리는 분명히 변했는데, \n그게 왜 진화의 증거가 아닐까?'),
         SuggestedQuestion(
-            text: '성경 인물들의 나이와 족보를 통해\n지구의 나이를 계산하는 방법은 무엇인가요?'),
+            text: '빅뱅이론에 반하는 관측이 이렇게 많은데, \n과학계는 왜 아직도 빅뱅을 정설로 가르칠까?'),
       ];
 
   /// 사용자 메시지 전송 및 AI 응답 처리
