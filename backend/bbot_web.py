@@ -12,13 +12,13 @@ def retrieve_web_documents(question: str, top_k: int = 5) -> list[dict]:
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT title, url, content
+                SELECT title, url, content, content_embedding <=> %s::vector AS score
                 FROM crawled_data
-                ORDER BY content_embedding <#> %s::vector
+                ORDER BY score
                 LIMIT %s
             """, (q_embedding, top_k))
             rows = cur.fetchall()
 
-    docs = [{"title": r[0], "url": r[1], "content": r[2]} for r in rows]
+    docs = [{"title": r[0], "url": r[1], "content": r[2], "score": float(r[3]), "type": "web"} for r in rows]
     print(f"📄 웹 검색 결과: {len(docs)}개\n")
     return docs

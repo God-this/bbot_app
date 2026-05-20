@@ -1,5 +1,5 @@
 from config import get_conn
-from .llm_factory import get_embedding
+from llm_factory import get_embedding
 
 embedding_model = get_embedding()
 

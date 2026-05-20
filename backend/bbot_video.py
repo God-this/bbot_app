@@ -20,17 +20,17 @@ def retrieve_video_segments(question: str, top_k: int = 3):
                 return []
 
             cur.execute("""
-                SELECT video_id, title, start_time, end_time, url, content
+                SELECT video_id, title, start_time, end_time, url, content, content_embedding <=> %s::vector AS score
                 FROM video_db
-                ORDER BY content_embedding <#> %s::vector
+                ORDER BY score
                 LIMIT %s
             """, (q_emb, top_k))
             rows = cur.fetchall()
 
     print(f"📄 영상 검색 결과: {len(rows)}개")
     results = []
-    for video_id, title, start, end, url, content in rows:
+    for video_id, title, start, end, url, content, score in rows:
         print(f"   🎬 {title} ({int(start)}s ~ {int(end)}s)")
         results.append({"video_id": video_id, "title": title, "start": start,
-                        "end": end, "url": url, "content": content})
+                        "end": end, "url": url, "content": content, "score": float(score), "type": "video"})
     return results
