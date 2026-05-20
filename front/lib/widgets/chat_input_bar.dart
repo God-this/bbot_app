@@ -1,5 +1,6 @@
 // 하단 입력 바
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../theme.dart';
 
 class ChatInputBar extends StatefulWidget {
@@ -28,6 +29,15 @@ class _ChatInputBarState extends State<ChatInputBar> {
       final hasText = _controller.text.trim().isNotEmpty;
       if (hasText != _hasText) setState(() => _hasText = hasText);
     });
+    _focusNode.onKeyEvent = (node, event) {
+      if (event is KeyDownEvent &&
+          event.logicalKey == LogicalKeyboardKey.enter &&
+          !HardwareKeyboard.instance.isShiftPressed) {
+        _handleSend();
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    };
   }
 
   @override
@@ -74,7 +84,8 @@ class _ChatInputBarState extends State<ChatInputBar> {
                 controller: _controller,
                 focusNode: _focusNode,
                 maxLines: null,
-                textInputAction: TextInputAction.newline,
+                textInputAction: TextInputAction.send,
+                onSubmitted: (_) => _handleSend(),
                 enabled: !widget.isLoading,
                 style: Theme.of(context).textTheme.bodyLarge,
                 decoration: InputDecoration(
