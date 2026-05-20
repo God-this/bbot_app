@@ -9,23 +9,34 @@ from langchain_core.runnables import RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
+from sentence_transformers import CrossEncoder
 
 from config import LLM_MODEL
 from llm_factory import get_client
 from bbot_web import retrieve_web_documents
 from bbot_book import retrieve_pages
 from bbot_video import retrieve_video_segments
+from utils import detect_language, translate_to_english
 
-from redis_cache import get_cached_answer, save_cached_answer
 import re
 
-from redis_semantic_cache import (
-    search_semantic_cache,
-    save_semantic_cache
+# ==================== Reranker ====================
 
-)
+_reranker = CrossEncoder("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1") # 다국어 모델
+
+try:
+    from redis_cache import get_cached_answer, save_cached_answer
+    from redis_semantic_cache import search_semantic_cache, save_semantic_cache
+    _REDIS_AVAILABLE = True
+except ImportError:
+    _REDIS_AVAILABLE = False
+
 
 client = get_client()
+
+# ==================== Cache Toggle ====================
+
+USE_CACHE = False  # redis 모듈 없으면 자동 비활성화
 
 # ==================== State ====================
 class GraphState(TypedDict):
@@ -46,9 +57,6 @@ def format_timedelta(seconds: int) -> str:
     m, s = divmod(r, 60)
     return f"{h:02}:{m:02}:{s:02}"
 
-def detect_language(text: str) -> str:
-    return "ko" if any("\uac00" <= c <= "\ud7a3" for c in text) else "en"
-
 def format_chat_history(history: List[str]) -> str:
     if not history:
         return "이전 대화 없음"
@@ -60,8 +68,32 @@ def normalize_query(query: str) -> str:
     query = re.sub(r"\s+", " ", query)
     return query
 
+# ==================== Reranking ====================
+def rerank_documents(question: str, docs: list[dict], top_k: int = 5) -> list[dict]:
+    """Cross-Encoder로 15개 문서를 재정렬해 top_k개만 반환"""
+    if not docs:
+        return []
+
+    print(f"🔀 [Rerank] {len(docs)}개 문서 → top {top_k} 선별 중...\n")
+
+    pairs = [(question, doc.get("content", "")) for doc in docs]
+    scores = _reranker.predict(pairs)
+
+    for doc, score in zip(docs, scores):
+        doc["rerank_score"] = float(score)
+
+    ranked = sorted(docs, key=lambda x: x["rerank_score"], reverse=True)[:top_k]
+
+    print(f"✅ [Rerank] 완료 — top-{top_k} 결과:")
+    for d in ranked:
+        cosine_sim = 1 - d.get("score", 0)
+        print(f"  [{d.get('type', '?'):5}] cosine_sim={cosine_sim:.4f}  rerank={d['rerank_score']:.3f}  {d.get('title', d.get('book', ''))[:40]}")
+    print()
+
+    return ranked
+
 # ==================== Parallel Retrieval ====================
-def retrieve_all_documents_parallel(question: str, top_k: int = 3):
+def retrieve_all_documents_parallel(question: str, top_k: int = 5):
     print("🔍 [Retrieve] Parallel search started...\n")
 
     with ThreadPoolExecutor(max_workers=5) as executor:
@@ -107,13 +139,14 @@ def route_question(state: GraphState) -> GraphState:
     }
 
 def retrieve_documents(state: GraphState) -> GraphState:
-    print("🌐 [Retrieve] Integrated retrieval...\n")
+    print("🌐 [Retrieve] 통합 검색...\n")
 
     query = state.get("rewritten_question") or state["question"]
+    english_query = translate_to_english(query)
 
     result = retrieve_all_documents_parallel(
-        query,
-        top_k=3
+        english_query,
+        top_k=5
     )
 
     return {
@@ -133,7 +166,6 @@ def judge_documents(state: GraphState) -> GraphState:
             "judgement": "not_resolved"
         }
 
-    # 문서 하나라도 있으면 무조건 resolved
     print("[Judge] Documents found → resolved\n")
 
     return {
@@ -263,7 +295,7 @@ true 또는 false만 출력.
 
 # ==================== Final Generate ====================
 
-def generate(question: str, thread_id: str = "user_1", use_cache: bool = True):
+def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CACHE):
     print("\n" + "=" * 60)
     print("===== Integrated Search Started =====")
     print("=" * 60)
@@ -271,33 +303,29 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = True):
 
     if not is_creation_question(question):
         return "창조과학 질문만 처리합니다.", {}
-    
-    # Query normalization
+
     normalized_question = normalize_query(question)
 
     print(f"🔍 Normalized Query: {normalized_question}\n")
 
-    # Exact Redis Cache 확인
-    cached = get_cached_answer(normalized_question)
+    if use_cache:
+        # Exact Redis Cache 확인
+        cached = get_cached_answer(normalized_question)
+        if cached:
+            print("⚡ Exact Redis Cache Hit!\n")
+            return cached["answer"], cached["sources"]
 
-    if use_cache and cached:
-        print("⚡ Exact Redis Cache Hit!\n")
-        return cached["answer"], cached["sources"]
-    if not use_cache:
-        print("🚫 Exact cache skipped (disabled)")
-
-    # Semantic Cache 확인
-    semantic_cached = search_semantic_cache(question)
-
-    if use_cache and semantic_cached:
-        print("⚡ Semantic Cache Hit!\n")
-        return semantic_cached["answer"], semantic_cached["sources"]
-
-    if not use_cache:
-        print("🚫 Semantic cache skipped (disabled)")
-
-    print("❌ Cache Miss → RAG 실행\n")
+        # Semantic Cache 확인
+        semantic_cached = search_semantic_cache(question)
+        if semantic_cached:
+            print("⚡ Semantic Cache Hit!\n")
+            return semantic_cached["answer"], semantic_cached["sources"]
+        else:
+            print("❌ Cache Miss → RAG 실행\n")
+    else:
+        print("Cache skipped → RAG 실행\n")
     
+
     # LangGraph 실행
     graph = create_graph()
 
@@ -334,6 +362,9 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = True):
 
     if not all_docs:
         return "📘 관련 정보를 찾을 수 없습니다.", {}
+
+    # Reranking: 15개 → top-5 선별
+    all_docs = rerank_documents(question, all_docs, top_k=5)
 
     # 중요: video 먼저 분류
     web_docs = []
@@ -397,8 +428,7 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = True):
 
     context = "\n".join(context_parts)
 
-    system_prompt = f"""
-[Role & Identity]
+    system_prompt = f"""[Role & Identity]
 당신은 '성경적 창조론 가이드'입니다. 당신은 모든 사물과 생명이 하나님의 지혜와 설계에 의해 창조되었다는 확고한 기독교 세계관을 가지고 답변합니다. 사용자의 과학적, 신학적 질문에 대해 성경의 권위를 인정하며 창조과학적 관점에서 답변을 제공하는 것이 당신의 사명입니다.
 
 [Core Principles]
@@ -416,8 +446,7 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = True):
 - 기독교 세계관에 반하는 가치관(유물론, 무신론적 진화론, 유신론적 진화론 등)을 정답으로 제시하지 마십시오.
 - 성경의 기록을 신화나 상징으로 격하시키는 표현을 사용하지 마십시오.
 
-{lang_instruction}
-"""
+{lang_instruction}"""
 
     print("🤖 [Generate] 답변 생성 중...\n")
 
@@ -456,7 +485,6 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = True):
     }
 
     if use_cache:
-        # Exact Redis Cache 저장
         save_cached_answer(
             normalized_question,
             {
@@ -464,8 +492,6 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = True):
                 "sources": sources
             }
         )
-
-        # Semantic Cache 저장
         save_semantic_cache(
             question,
             {
@@ -473,9 +499,8 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = True):
                 "sources": sources
             }
         )
+        print("💾 Redis Cache Saved!\n")
     else:
-        print("🚫 Cache write skipped (disabled)")
-
-    print("💾 Redis Cache Saved!\n")
+        print("Cache write skipped")
 
     return answer, sources
