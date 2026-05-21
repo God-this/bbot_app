@@ -158,7 +158,9 @@ class VideoSource {
         return id.isNotEmpty ? id : null;
       }
       if (uri.host.contains('youtube.com')) {
-        final v = uri.queryParameters['v'];
+        var v = uri.queryParameters['v'];
+        // ?v=ID?t=79s 형태의 비정상 URL에서 ?t=... 제거
+        if (v != null && v.contains('?')) v = v.split('?').first;
         return (v != null && v.isNotEmpty) ? v : null;
       }
     } catch (_) {}
