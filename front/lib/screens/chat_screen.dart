@@ -260,6 +260,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       TextButton(
                         onPressed: () {
                           chat.clearChat();
+                          setState(() => _selectedSources = null);
                           Navigator.pop(context);
                         },
                         child: const Text(
