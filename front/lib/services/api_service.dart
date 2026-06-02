@@ -2,26 +2,36 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/chat_models.dart';
 
+/// 401 Unauthorized 응답 시 throw되는 예외
+class AuthException implements Exception {
+  const AuthException();
+}
+
 /// BeBot 백엔드 API 서비스
-/// Python FastAPI/Flask 백엔드와 통신
 class BeBotApiService {
   final String baseUrl;
+  String? _token;
 
-  BeBotApiService({required this.baseUrl});
+  BeBotApiService({required this.baseUrl, String? token}) : _token = token;
+
+  void setToken(String? token) => _token = token;
+
+  Map<String, String> get _headers => {
+        'Content-Type': 'application/json',
+        if (_token != null) 'Authorization': 'Bearer $_token',
+      };
 
   /// 질문을 백엔드로 전송하고 답변 + 출처를 받아옴
-  /// 
-  /// 백엔드 엔드포인트: POST /api/chat
-  /// Request body: { "question": "..." }
-  /// Response: { "answer": "...", "sources": { "web_docs": [...], "book_docs": [...], "video_docs": [...] } }
   Future<({String answer, SourceInfo sources})> sendQuestion(
       String question) async {
     try {
       final response = await http.post(
         Uri.parse('$baseUrl/api/chat'),
-        headers: {'Content-Type': 'application/json'},
+        headers: _headers,
         body: jsonEncode({'question': question}),
       );
+
+      if (response.statusCode == 401) throw const AuthException();
 
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes));
@@ -49,6 +59,8 @@ class BeBotApiService {
       } else {
         throw Exception('서버 오류: ${response.statusCode}');
       }
+    } on AuthException {
+      rethrow;
     } catch (e) {
       throw Exception('네트워크 오류: $e');
     }
