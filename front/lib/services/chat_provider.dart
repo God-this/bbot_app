@@ -20,10 +20,9 @@ class ChatProvider extends ChangeNotifier {
 
   /// 추천 질문 리스트
   List<SuggestedQuestion> get suggestedQuestions => [
+        SuggestedQuestion(text: '핀치새 부리는 분명히 변했는데,\n왜 진화의 증거가 아닐까?'),
+        SuggestedQuestion(text: '창세기 때의 수명과 지금 수명이 다른 이유가 뭘까?'),
         SuggestedQuestion(text: '방주에서 살아남은 공룡,\n왜 결국 멸종되었을까?'),
-        SuggestedQuestion(text: '핀치새 부리는 분명히 변했는데,\n그게 왜 진화의 증거가 아닐까?'),
-        SuggestedQuestion(
-            text: '빅뱅이론에 반하는 관측이 이렇게 많은데,\n과학계는 왜 아직도 빅뱅을 정설로 가르칠까?'),
       ];
 
   /// 사용자 메시지 전송 및 AI 응답 처리
