@@ -146,7 +146,7 @@ async def chat(
     try:
         from bbot_graph import generate
 
-        answer, sources_raw = generate(req.question.strip())
+        answer, sources_raw = await asyncio.to_thread(generate, req.question.strip())
 
         raw = sources_raw if isinstance(sources_raw, dict) else {}
         sources = {
