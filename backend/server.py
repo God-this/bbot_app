@@ -53,12 +53,20 @@ app.add_middleware(
 )
 
 # ──────────────────────────────────────────────────────────
+# 영상 상태 갱신 기능 플래그
+# False로 바꾸면 스케줄러 및 수동 갱신이 모두 비활성화됨
+# ──────────────────────────────────────────────────────────
+VIDEO_HEALTH_CHECK_ENABLED = False
+
+# ──────────────────────────────────────────────────────────
 # 영상 상태 캐시 (기존 기능 유지)
 # ──────────────────────────────────────────────────────────
 _video_status_cache: dict = {"data": None, "checked_at": None}
 
 
 async def _refresh_video_status():
+    if not VIDEO_HEALTH_CHECK_ENABLED:
+        return
     try:
         from video_health_checker import VideoHealthChecker
         checker = VideoHealthChecker()
@@ -93,7 +101,8 @@ async def _video_status_scheduler():
 
 @app.on_event("startup")
 async def startup():
-    asyncio.create_task(_video_status_scheduler())
+    if VIDEO_HEALTH_CHECK_ENABLED:
+        asyncio.create_task(_video_status_scheduler())
 
 
 # ──────────────────────────────────────────────────────────
