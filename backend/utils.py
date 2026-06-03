@@ -30,5 +30,4 @@ def translate_to_english(question: str) -> str:
         max_completion_tokens=200,
     )
     translated = res.choices[0].message.content.strip()
-    print(f"🌐 번역: '{question}' → '{translated}'")
     return translated

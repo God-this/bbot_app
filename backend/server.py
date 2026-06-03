@@ -29,6 +29,12 @@ from auth import router as auth_router, chat_router, get_current_user, require_a
 app = FastAPI(title="BeBot API", version="2.0.0")
 
 # ──────────────────────────────────────────────────────────
+# 영상 상태 갱신 기능 플래그
+# False = 비활성화
+# ──────────────────────────────────────────────────────────
+VIDEO_HEALTH_CHECK_ENABLED = False
+
+# ──────────────────────────────────────────────────────────
 # 정적 파일 (책 이미지)
 # ──────────────────────────────────────────────────────────
 _images_dir = Path(__file__).parent / "extracted_images"
@@ -59,6 +65,8 @@ _video_status_cache: dict = {"data": None, "checked_at": None}
 
 
 async def _refresh_video_status():
+    if not VIDEO_HEALTH_CHECK_ENABLED:
+        return
     try:
         from video_health_checker import VideoHealthChecker
         checker = VideoHealthChecker()
@@ -93,7 +101,8 @@ async def _video_status_scheduler():
 
 @app.on_event("startup")
 async def startup():
-    asyncio.create_task(_video_status_scheduler())
+    if VIDEO_HEALTH_CHECK_ENABLED:
+        asyncio.create_task(_video_status_scheduler())
 
 
 # ──────────────────────────────────────────────────────────
@@ -101,7 +110,8 @@ async def startup():
 # ──────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
-    question: str
+    question:   str
+    session_id: Optional[int] = None
 
 
 class ChatResponse(BaseModel):
@@ -136,7 +146,7 @@ async def chat(
     try:
         from bbot_graph import generate
 
-        answer, sources_raw = generate(req.question.strip())
+        answer, sources_raw = await asyncio.to_thread(generate, req.question.strip())
 
         raw = sources_raw if isinstance(sources_raw, dict) else {}
         sources = {
@@ -154,10 +164,11 @@ async def chat(
         session_id = None
         try:
             session_id = save_chat_message(
-                user_id  = user["user_id"],
-                question = req.question.strip(),
-                answer   = answer,
-                sources  = raw,
+                user_id    = user["user_id"],
+                question   = req.question.strip(),
+                answer     = answer,
+                sources    = raw,
+                session_id = req.session_id,
             )
         except Exception as save_err:
             print(f"⚠️ 채팅 기록 저장 실패: {save_err}")

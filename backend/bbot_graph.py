@@ -68,29 +68,36 @@ def normalize_query(query: str) -> str:
     query = re.sub(r"\s+", " ", query)
     return query
 
-# ==================== Reranking ====================
-def rerank_documents(question: str, docs: list[dict], top_k: int = 5) -> list[dict]:
-    """Cross-Encoder로 15개 문서를 재정렬해 top_k개만 반환"""
-    if not docs:
-        return []
+# ==================== Question Filter ====================
+def is_creation_question(question: str) -> bool:
+    res = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[
+            {
+                "role": "user",
+                "content": f"""
+다음 질문이 아래 중 하나라도 관련되면 true:
 
-    print(f"🔀 [Rerank] {len(docs)}개 문서 → top {top_k} 선별 중...\n")
+- 성경
+- 창조
+- 진화
+- 생물 기원
+- 노아의 홍수
+(창조설계, 대홍수, 화석, 진화론, 기독교, 창조신앙, 천문학, 연대문제 등과 관련된 질문도 포함)
 
-    pairs = [(question, doc.get("content", "")) for doc in docs]
-    scores = _reranker.predict(pairs)
+조금이라도 관련 있으면 true로 판단해.
 
-    for doc, score in zip(docs, scores):
-        doc["rerank_score"] = float(score)
+질문:
+{question}
 
-    ranked = sorted(docs, key=lambda x: x["rerank_score"], reverse=True)[:top_k]
+true 또는 false만 출력.
+"""
+            }
+        ],
+        temperature=0
+    )
 
-    print(f"✅ [Rerank] 완료 — top-{top_k} 결과:")
-    for d in ranked:
-        cosine_sim = 1 - d.get("score", 0)
-        print(f"  [{d.get('type', '?'):5}] cosine_sim={cosine_sim:.4f}  rerank={d['rerank_score']:.3f}  {d.get('title', d.get('book', ''))[:40]}")
-    print()
-
-    return ranked
+    return "true" in res.choices[0].message.content.lower()
 
 # ==================== Parallel Retrieval ====================
 def deduplicate_docs(docs: list[dict]) -> list[dict]:
@@ -104,7 +111,6 @@ def deduplicate_docs(docs: list[dict]) -> list[dict]:
     return result
 
 def retrieve_all_documents_parallel(queries: list[str], top_k: int = 5):
-    print(f"🔍 [Retrieve] Parallel search started with {len(queries)} queries...\n")
 
     futures = []
     with ThreadPoolExecutor(max_workers=9) as executor:
@@ -138,7 +144,7 @@ def retrieve_all_documents_parallel(queries: list[str], top_k: int = 5):
 
 # ==================== Graph Nodes ====================
 def route_question(state: GraphState) -> GraphState:
-    print("🤖 [Router] Question routing...\n")
+    print("[Router]")
 
     return {
         **state,
@@ -147,7 +153,7 @@ def route_question(state: GraphState) -> GraphState:
     }
 
 def retrieve_documents(state: GraphState) -> GraphState:
-    print("🌐 [Retrieve] 통합 검색...\n")
+    print("[Retrieve]")
 
     query = state.get("rewritten_question") or state["question"]
     english_query = translate_to_english(query)
@@ -166,7 +172,7 @@ def retrieve_documents(state: GraphState) -> GraphState:
     }
 
 def judge_documents(state: GraphState) -> GraphState:
-    print("🤖 [Judge] Evaluating documents...\n")
+    print("[Judge]")
 
     docs = state.get("documents", [])
 
@@ -185,7 +191,7 @@ def judge_documents(state: GraphState) -> GraphState:
     }
 
 def rewrite_question(state: GraphState) -> GraphState:
-    print("✍️ [Rewrite] Question rewriting...\n")
+    print("✍️ [Rewrite]")
 
     question = state["question"]
     iteration = state.get("iteration", 0)
@@ -274,35 +280,29 @@ def create_graph():
         checkpointer=MemorySaver()
     )
 
-def is_creation_question(question: str) -> bool:
-    res = client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": f"""
-다음 질문이 아래 중 하나라도 관련되면 true:
+# ==================== Reranking ====================
+def rerank_documents(question: str, docs: list[dict], top_k: int = 5) -> list[dict]:
+    """Cross-Encoder로 15개 문서를 재정렬해 top_k개만 반환"""
+    if not docs:
+        return []
 
-- 성경
-- 창조
-- 진화
-- 생물 기원
-- 노아의 홍수
-(창조설계, 대홍수, 화석, 진화론, 기독교, 창조신앙, 천문학, 연대문제 등과 관련된 질문도 포함)
+    print(f"[Rerank] {len(docs)}개 문서 → top {top_k} 선별 중...\n")
 
-조금이라도 관련 있으면 true로 판단해.
+    pairs = [(question, doc.get("content", "")) for doc in docs]
+    scores = _reranker.predict(pairs)
 
-질문:
-{question}
+    for doc, score in zip(docs, scores):
+        doc["rerank_score"] = float(score)
 
-true 또는 false만 출력.
-"""
-            }
-        ],
-        temperature=0
-    )
+    ranked = sorted(docs, key=lambda x: x["rerank_score"], reverse=True)[:top_k]
 
-    return "true" in res.choices[0].message.content.lower()
+    print(f"✅ [Rerank] 완료 — top-{top_k} 결과:")
+    for d in ranked:
+        cosine_sim = 1 - d.get("score", 0)
+        print(f"  ▫️[{d.get('type', '?'):5}] cosine_sim={cosine_sim:.4f}  rerank={d['rerank_score']:.3f} //{d.get('title', d.get('book', ''))[:40]}")
+    print()
+
+    return ranked
 
 # ==================== Final Generate ====================
 
@@ -310,32 +310,26 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
     print("\n" + "=" * 60)
     print("===== Integrated Search Started =====")
     print("=" * 60)
-    print(f"💁‍♂️ Question: {question}\n")
+    print(f"[Question]: {question}")
 
     if not is_creation_question(question):
         return "창조과학 질문만 처리합니다.", {}
 
     normalized_question = normalize_query(question)
 
-    print(f"🔍 Normalized Query: {normalized_question}\n")
+    print(f"[Normalized Query]: {normalized_question}\n")
 
     if use_cache:
         # Exact Redis Cache 확인
         cached = get_cached_answer(normalized_question)
         if cached:
-            print("⚡ Exact Redis Cache Hit!\n")
             return cached["answer"], cached["sources"]
 
         # Semantic Cache 확인
         semantic_cached = search_semantic_cache(question)
         if semantic_cached:
-            print("⚡ Semantic Cache Hit!\n")
             return semantic_cached["answer"], semantic_cached["sources"]
-        else:
-            print("❌ Cache Miss → RAG 실행\n")
-    else:
-        print("Cache skipped → RAG 실행\n")
-    
+
 
     # LangGraph 실행
     graph = create_graph()
@@ -372,7 +366,7 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
         )
 
     if not all_docs:
-        return "📘 관련 정보를 찾을 수 없습니다.", {}
+        return "❌ 관련 정보를 찾을 수 없습니다.", {}
 
     # Reranking: 15개 → top-5 선별
     all_docs = rerank_documents(question, all_docs, top_k=5)
@@ -465,7 +459,7 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
 
 {lang_instruction}"""
 
-    print("🤖 [Generate] 답변 생성 중...\n")
+    print("\n[Generate]")
 
     res = client.chat.completions.create(
         model=LLM_MODEL,
@@ -517,8 +511,5 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
                 "sources": sources
             }
         )
-        print("💾 Redis Cache Saved!\n")
-    else:
-        print("Cache write skipped")
 
     return answer, sources

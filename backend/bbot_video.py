@@ -5,7 +5,6 @@ embedding_model = get_embedding()
 
 
 def retrieve_video_segments(question: str, top_k: int = 3):
-    print(f"\n🎬 [Video] 질문: {question}")
     q_emb = embedding_model.embed_query(question)
 
     with get_conn() as conn:
@@ -27,10 +26,8 @@ def retrieve_video_segments(question: str, top_k: int = 3):
             """, (q_emb, top_k))
             rows = cur.fetchall()
 
-    print(f"📄 영상 검색 결과: {len(rows)}개")
     results = []
     for video_id, title, start, end, url, content, score in rows:
-        print(f"   🎬 {title} ({int(start)}s ~ {int(end)}s)")
         results.append({"video_id": video_id, "title": title, "start": start,
                         "end": end, "url": url, "content": content, "score": float(score), "type": "video"})
     return results

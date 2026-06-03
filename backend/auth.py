@@ -209,36 +209,38 @@ def get_me(user: dict = Depends(get_current_user)):
 chat_router = APIRouter(prefix="/api/chat", tags=["chat-history"])
 
 
-def get_or_create_today_session(user_id: int, first_question: str) -> int:
+def get_or_create_session(
+    user_id:        int,
+    first_question: str,
+    session_id:     int | None = None,
+) -> int:
     """
-    오늘 날짜의 세션이 있으면 재사용, 없으면 새 세션을 생성합니다.
+    session_id가 주어지고 해당 세션이 이 사용자 소유이면 재사용합니다.
+    그렇지 않으면 항상 새 세션을 생성합니다.
     Returns: session_id (int)
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # 오늘 날짜 세션 조회
-            cur.execute("""
-                SELECT id FROM chat_sessions
-                WHERE user_id = %s
-                  AND DATE(created_at AT TIME ZONE 'Asia/Seoul') = CURRENT_DATE
-                ORDER BY created_at DESC
-                LIMIT 1
-            """, (user_id,))
-            row = cur.fetchone()
+            # 기존 세션 검증
+            if session_id is not None:
+                cur.execute(
+                    "SELECT id FROM chat_sessions WHERE id = %s AND user_id = %s",
+                    (session_id, user_id),
+                )
+                row = cur.fetchone()
+                if row:
+                    return session_id
 
-            if row:
-                return row[0]
-
-            # 없으면 새 세션 생성 (첫 질문 앞 30자를 제목으로)
+            # 새 세션 생성 (첫 질문 앞 30자를 제목으로)
             title = first_question[:30] + ("..." if len(first_question) > 30 else "")
             cur.execute("""
                 INSERT INTO chat_sessions (user_id, title)
                 VALUES (%s, %s)
                 RETURNING id
             """, (user_id, title))
-            session_id = cur.fetchone()[0]
+            new_id = cur.fetchone()[0]
             conn.commit()
-            return session_id
+            return new_id
 
 
 def save_chat_message(
@@ -246,9 +248,10 @@ def save_chat_message(
     question:   str,
     answer:     str,
     sources:    dict,
+    session_id: int | None = None,
 ):
     """질문(user) + 답변(assistant)을 chat_messages에 저장합니다."""
-    session_id = get_or_create_today_session(user_id, question)
+    session_id = get_or_create_session(user_id, question, session_id)
 
     with get_conn() as conn:
         with conn.cursor() as cur:
