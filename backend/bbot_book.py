@@ -10,7 +10,6 @@ def _to_image_url(file_path: str) -> str:
     return f"{BASE_URL}/images/{os.path.basename(file_path)}"
 
 def retrieve_pages(question: str, top_k: int = 5):
-    print(f"\n🔎 [Book] 질문: {question}")
     q_emb = embedding_model.embed_query(question)
 
     with get_conn() as conn:
@@ -37,15 +36,8 @@ def retrieve_pages(question: str, top_k: int = 5):
             """, (q_emb, top_k))
             rows = cur.fetchall()
 
-    print(f"📄 통합 검색 결과: {len(rows)}개")
     results = []
     for book_name, page_num, content, score, images in rows:
-        print(f"   📘 [{book_name}] 페이지 {page_num}")
-        print(f"      ⭐ score: {score}")
-        if images:
-            for img in images:
-                if img:
-                    print(f"      🖼️ {img}")
         results.append({
             "book": book_name,
             "page": page_num,

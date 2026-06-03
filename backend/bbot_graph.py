@@ -74,7 +74,7 @@ def rerank_documents(question: str, docs: list[dict], top_k: int = 5) -> list[di
     if not docs:
         return []
 
-    print(f"🔀 [Rerank] {len(docs)}개 문서 → top {top_k} 선별 중...\n")
+    print(f"[Rerank] {len(docs)}개 문서 → top {top_k} 선별 중...\n")
 
     pairs = [(question, doc.get("content", "")) for doc in docs]
     scores = _reranker.predict(pairs)
@@ -87,7 +87,7 @@ def rerank_documents(question: str, docs: list[dict], top_k: int = 5) -> list[di
     print(f"✅ [Rerank] 완료 — top-{top_k} 결과:")
     for d in ranked:
         cosine_sim = 1 - d.get("score", 0)
-        print(f"  [{d.get('type', '?'):5}] cosine_sim={cosine_sim:.4f}  rerank={d['rerank_score']:.3f}  {d.get('title', d.get('book', ''))[:40]}")
+        print(f"  ▫️[{d.get('type', '?'):5}] cosine_sim={cosine_sim:.4f}  rerank={d['rerank_score']:.3f} //{d.get('title', d.get('book', ''))[:40]}")
     print()
 
     return ranked
@@ -104,7 +104,6 @@ def deduplicate_docs(docs: list[dict]) -> list[dict]:
     return result
 
 def retrieve_all_documents_parallel(queries: list[str], top_k: int = 5):
-    print(f"🔍 [Retrieve] Parallel search started with {len(queries)} queries...\n")
 
     futures = []
     with ThreadPoolExecutor(max_workers=9) as executor:
@@ -138,7 +137,7 @@ def retrieve_all_documents_parallel(queries: list[str], top_k: int = 5):
 
 # ==================== Graph Nodes ====================
 def route_question(state: GraphState) -> GraphState:
-    print("🤖 [Router] Question routing...\n")
+    print("[Router]")
 
     return {
         **state,
@@ -147,7 +146,7 @@ def route_question(state: GraphState) -> GraphState:
     }
 
 def retrieve_documents(state: GraphState) -> GraphState:
-    print("🌐 [Retrieve] 통합 검색...\n")
+    print("[Retrieve]")
 
     query = state.get("rewritten_question") or state["question"]
     english_query = translate_to_english(query)
@@ -166,7 +165,7 @@ def retrieve_documents(state: GraphState) -> GraphState:
     }
 
 def judge_documents(state: GraphState) -> GraphState:
-    print("🤖 [Judge] Evaluating documents...\n")
+    print("[Judge]")
 
     docs = state.get("documents", [])
 
@@ -185,7 +184,7 @@ def judge_documents(state: GraphState) -> GraphState:
     }
 
 def rewrite_question(state: GraphState) -> GraphState:
-    print("✍️ [Rewrite] Question rewriting...\n")
+    print("✍️ [Rewrite]")
 
     question = state["question"]
     iteration = state.get("iteration", 0)
@@ -310,31 +309,25 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
     print("\n" + "=" * 60)
     print("===== Integrated Search Started =====")
     print("=" * 60)
-    print(f"💁‍♂️ Question: {question}\n")
+    print(f"[Question]: {question}")
 
     if not is_creation_question(question):
         return "창조과학 질문만 처리합니다.", {}
 
     normalized_question = normalize_query(question)
 
-    print(f"🔍 Normalized Query: {normalized_question}\n")
+    print(f"[Normalized Query]: {normalized_question}\n")
 
     if use_cache:
         # Exact Redis Cache 확인
         cached = get_cached_answer(normalized_question)
         if cached:
-            print("⚡ Exact Redis Cache Hit!\n")
             return cached["answer"], cached["sources"]
 
         # Semantic Cache 확인
         semantic_cached = search_semantic_cache(question)
         if semantic_cached:
-            print("⚡ Semantic Cache Hit!\n")
             return semantic_cached["answer"], semantic_cached["sources"]
-        else:
-            print("❌ Cache Miss → RAG 실행\n")
-    else:
-        print("Cache skipped → RAG 실행\n")
     
 
     # LangGraph 실행
@@ -372,7 +365,7 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
         )
 
     if not all_docs:
-        return "📘 관련 정보를 찾을 수 없습니다.", {}
+        return "❌ 관련 정보를 찾을 수 없습니다.", {}
 
     # Reranking: 15개 → top-5 선별
     all_docs = rerank_documents(question, all_docs, top_k=5)
@@ -465,7 +458,7 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
 
 {lang_instruction}"""
 
-    print("🤖 [Generate] 답변 생성 중...\n")
+    print("\n[Generate]")
 
     res = client.chat.completions.create(
         model=LLM_MODEL,
@@ -517,8 +510,5 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
                 "sources": sources
             }
         )
-        print("💾 Redis Cache Saved!\n")
-    else:
-        print("Cache write skipped")
 
     return answer, sources
