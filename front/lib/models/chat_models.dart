@@ -174,3 +174,27 @@ class SuggestedQuestion {
 
   SuggestedQuestion({required this.text});
 }
+
+/// 대화 세션 (서버에 저장된 기록)
+class ChatSession {
+  final int id;
+  final String title;
+  final DateTime createdAt;
+  final int messageCount;
+
+  const ChatSession({
+    required this.id,
+    required this.title,
+    required this.createdAt,
+    required this.messageCount,
+  });
+
+  factory ChatSession.fromMap(Map<String, dynamic> map) {
+    return ChatSession(
+      id: map['id'] as int,
+      title: (map['title'] as String?) ?? '(제목 없음)',
+      createdAt: DateTime.parse(map['created_at'] as String),
+      messageCount: (map['message_count'] as int?) ?? 0,
+    );
+  }
+}

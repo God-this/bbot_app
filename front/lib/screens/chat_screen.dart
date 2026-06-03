@@ -9,6 +9,7 @@ import '../widgets/welcome_view.dart';
 import '../widgets/chat_bubble.dart';
 import '../widgets/chat_input_bar.dart';
 import '../widgets/sources_sheet.dart';
+import '../widgets/history_drawer.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -51,6 +52,15 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: _buildAppBar(context),
+      drawer: Drawer(
+        width: MediaQuery.sizeOf(context).width * 0.85,
+        child: HistoryDrawer(
+          onSessionLoaded: () => setState(() => _selectedSources = null),
+        ),
+      ),
+      onDrawerChanged: (isOpened) {
+        if (isOpened) context.read<ChatProvider>().fetchSessions();
+      },
       body: Consumer<ChatProvider>(
         builder: (context, chat, _) {
           return SafeArea(

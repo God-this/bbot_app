@@ -66,6 +66,64 @@ class BeBotApiService {
     }
   }
 
+  /// 내 대화 세션 목록 조회
+  Future<List<Map<String, dynamic>>> getSessions() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/chat/sessions'),
+        headers: _headers,
+      );
+      if (response.statusCode == 401) throw const AuthException();
+      if (response.statusCode == 200) {
+        final list = jsonDecode(utf8.decode(response.bodyBytes)) as List<dynamic>;
+        return list.cast<Map<String, dynamic>>();
+      }
+      throw Exception('서버 오류: ${response.statusCode}');
+    } on AuthException {
+      rethrow;
+    } catch (e) {
+      throw Exception('네트워크 오류: $e');
+    }
+  }
+
+  /// 세션의 메시지 목록 조회
+  Future<List<Map<String, dynamic>>> getSessionMessages(int sessionId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/chat/sessions/$sessionId/messages'),
+        headers: _headers,
+      );
+      if (response.statusCode == 401) throw const AuthException();
+      if (response.statusCode == 200) {
+        final list = jsonDecode(utf8.decode(response.bodyBytes)) as List<dynamic>;
+        return list.cast<Map<String, dynamic>>();
+      }
+      throw Exception('서버 오류: ${response.statusCode}');
+    } on AuthException {
+      rethrow;
+    } catch (e) {
+      throw Exception('네트워크 오류: $e');
+    }
+  }
+
+  /// 세션 삭제
+  Future<void> deleteSession(int sessionId) async {
+    try {
+      final response = await http.delete(
+        Uri.parse('$baseUrl/api/chat/sessions/$sessionId'),
+        headers: _headers,
+      );
+      if (response.statusCode == 401) throw const AuthException();
+      if (response.statusCode != 200) {
+        throw Exception('서버 오류: ${response.statusCode}');
+      }
+    } on AuthException {
+      rethrow;
+    } catch (e) {
+      throw Exception('네트워크 오류: $e');
+    }
+  }
+
   /// 서버 상태 확인
   Future<bool> healthCheck() async {
     try {

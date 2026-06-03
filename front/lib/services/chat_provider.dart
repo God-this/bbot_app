@@ -13,14 +13,23 @@ class ChatProvider extends ChangeNotifier {
   bool _isTyping = false;
   String? _error;
 
+  List<ChatSession> _sessions = [];
+  bool _isLoadingSessions = false;
+  bool _isLoadingSession  = false;
+  int? _activeSessionId;
+
   ChatProvider({required BeBotApiService api, required AuthProvider auth})
       : _api  = api,
         _auth = auth;
 
-  List<ChatMessage> get messages    => _messages;
-  bool              get isTyping    => _isTyping;
-  String?           get error       => _error;
-  bool              get hasMessages => _messages.isNotEmpty;
+  List<ChatMessage> get messages           => _messages;
+  bool              get isTyping           => _isTyping;
+  String?           get error              => _error;
+  bool              get hasMessages        => _messages.isNotEmpty;
+  List<ChatSession> get sessions           => _sessions;
+  bool              get isLoadingSessions  => _isLoadingSessions;
+  bool              get isLoadingSession   => _isLoadingSession;
+  int?              get activeSessionId    => _activeSessionId;
 
   List<SuggestedQuestion> get suggestedQuestions => [
         SuggestedQuestion(text: '핀치새 부리는 분명히 변했는데,\n왜 진화의 증거가 아닐까?'),
@@ -88,9 +97,95 @@ class ChatProvider extends ChangeNotifier {
   }
 
   void clearChat() {
-    _messages = [];
-    _error    = null;
-    _isTyping = false;
+    _messages        = [];
+    _error           = null;
+    _isTyping        = false;
+    _activeSessionId = null;
     notifyListeners();
+  }
+
+  // ─── 세션 목록 ───────────────────────────────────────────
+
+  Future<void> fetchSessions() async {
+    if (_isLoadingSessions) return;
+    _isLoadingSessions = true;
+    notifyListeners();
+
+    try {
+      final raw = await _api.getSessions();
+      _sessions = raw.map(ChatSession.fromMap).toList();
+    } on AuthException {
+      await _auth.onUnauthorized();
+      return;
+    } catch (e) {
+      debugPrint('세션 목록 로드 실패: $e');
+    } finally {
+      _isLoadingSessions = false;
+      notifyListeners();
+    }
+  }
+
+  // ─── 세션 메시지 불러오기 ────────────────────────────────
+
+  Future<void> loadSession(int sessionId) async {
+    _isLoadingSession = true;
+    _error            = null;
+    notifyListeners();
+
+    try {
+      final raw = await _api.getSessionMessages(sessionId);
+      _messages = raw.map((m) {
+        final role      = m['role'] as String? ?? 'user';
+        final sourcesRaw = m['sources'] as Map<String, dynamic>?;
+        return ChatMessage(
+          id:        m['id'].toString(),
+          content:   m['content'] as String? ?? '',
+          isUser:    role == 'user',
+          timestamp: DateTime.parse(m['created_at'] as String),
+          sources:   role == 'assistant' ? _parseSourceInfo(sourcesRaw) : null,
+        );
+      }).toList();
+      _activeSessionId = sessionId;
+    } on AuthException {
+      await _auth.onUnauthorized();
+      return;
+    } catch (e) {
+      _error = e.toString();
+    } finally {
+      _isLoadingSession = false;
+      notifyListeners();
+    }
+  }
+
+  // ─── 세션 삭제 ───────────────────────────────────────────
+
+  Future<void> deleteSession(int sessionId) async {
+    try {
+      await _api.deleteSession(sessionId);
+      _sessions.removeWhere((s) => s.id == sessionId);
+      if (_activeSessionId == sessionId) {
+        _messages        = [];
+        _activeSessionId = null;
+      }
+      notifyListeners();
+    } on AuthException {
+      await _auth.onUnauthorized();
+    } catch (e) {
+      debugPrint('세션 삭제 실패: $e');
+    }
+  }
+
+  // ─── 소스 파싱 헬퍼 ─────────────────────────────────────
+
+  SourceInfo? _parseSourceInfo(Map<String, dynamic>? sources) {
+    if (sources == null) return null;
+    final web   = (sources['web_docs']   as List<dynamic>? ?? [])
+        .map((d) => WebSource.fromMap(d as Map<String, dynamic>)).toList();
+    final book  = (sources['book_docs']  as List<dynamic>? ?? [])
+        .map((d) => BookSource.fromMap(d as Map<String, dynamic>)).toList();
+    final video = (sources['video_docs'] as List<dynamic>? ?? [])
+        .map((d) => VideoSource.fromMap(d as Map<String, dynamic>)).toList();
+    final info  = SourceInfo(webSources: web, bookSources: book, videoSources: video);
+    return info.isEmpty ? null : info;
   }
 }
