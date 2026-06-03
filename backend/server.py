@@ -29,6 +29,12 @@ from auth import router as auth_router, chat_router, get_current_user, require_a
 app = FastAPI(title="BeBot API", version="2.0.0")
 
 # ──────────────────────────────────────────────────────────
+# 영상 상태 갱신 기능 플래그
+# False = 비활성화
+# ──────────────────────────────────────────────────────────
+VIDEO_HEALTH_CHECK_ENABLED = False
+
+# ──────────────────────────────────────────────────────────
 # 정적 파일 (책 이미지)
 # ──────────────────────────────────────────────────────────
 _images_dir = Path(__file__).parent / "extracted_images"
@@ -51,12 +57,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# ──────────────────────────────────────────────────────────
-# 영상 상태 갱신 기능 플래그
-# False로 바꾸면 스케줄러 및 수동 갱신이 모두 비활성화됨
-# ──────────────────────────────────────────────────────────
-VIDEO_HEALTH_CHECK_ENABLED = False
 
 # ──────────────────────────────────────────────────────────
 # 영상 상태 캐시 (기존 기능 유지)
@@ -110,7 +110,8 @@ async def startup():
 # ──────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
-    question: str
+    question:   str
+    session_id: Optional[int] = None
 
 
 class ChatResponse(BaseModel):
@@ -163,10 +164,11 @@ async def chat(
         session_id = None
         try:
             session_id = save_chat_message(
-                user_id  = user["user_id"],
-                question = req.question.strip(),
-                answer   = answer,
-                sources  = raw,
+                user_id    = user["user_id"],
+                question   = req.question.strip(),
+                answer     = answer,
+                sources    = raw,
+                session_id = req.session_id,
             )
         except Exception as save_err:
             print(f"⚠️ 채팅 기록 저장 실패: {save_err}")

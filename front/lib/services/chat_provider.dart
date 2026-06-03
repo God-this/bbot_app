@@ -62,7 +62,13 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final result = await _api.sendQuestion(text.trim());
+      final result = await _api.sendQuestion(
+        text.trim(),
+        sessionId: _activeSessionId,
+      );
+
+      // 백엔드에서 확정된 session_id를 저장
+      if (result.sessionId != null) _activeSessionId = result.sessionId;
 
       final index = _messages.indexWhere((m) => m.id == loadingMsg.id);
       if (index != -1) {

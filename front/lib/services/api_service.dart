@@ -21,14 +21,17 @@ class BeBotApiService {
         if (_token != null) 'Authorization': 'Bearer $_token',
       };
 
-  /// 질문을 백엔드로 전송하고 답변 + 출처를 받아옴
-  Future<({String answer, SourceInfo sources})> sendQuestion(
-      String question) async {
+  /// 질문을 백엔드로 전송하고 답변 + 출처 + 세션 ID를 받아옴
+  Future<({String answer, SourceInfo sources, int? sessionId})> sendQuestion(
+      String question, {int? sessionId}) async {
     try {
+      final body = <String, dynamic>{'question': question};
+      if (sessionId != null) body['session_id'] = sessionId;
+
       final response = await http.post(
         Uri.parse('$baseUrl/api/chat'),
         headers: _headers,
-        body: jsonEncode({'question': question}),
+        body: jsonEncode(body),
       );
 
       if (response.statusCode == 401) throw const AuthException();
@@ -55,6 +58,7 @@ class BeBotApiService {
             bookSources: bookDocs,
             videoSources: videoDocs,
           ),
+          sessionId: data['session_id'] as int?,
         );
       } else {
         throw Exception('서버 오류: ${response.statusCode}');
