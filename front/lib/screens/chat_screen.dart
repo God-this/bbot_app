@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/chat_models.dart';
 import '../theme.dart';
 import '../services/chat_provider.dart';
+import '../services/auth_provider.dart';
 import '../widgets/welcome_view.dart';
 import '../widgets/chat_bubble.dart';
 import '../widgets/chat_input_bar.dart';
@@ -211,6 +212,33 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  void _showLogoutDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('로그아웃'),
+        content: const Text('로그아웃 하시겠습니까?'),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              context.read<AuthProvider>().signOut();
+            },
+            child: const Text(
+              '로그아웃',
+              style: TextStyle(color: AppColors.error),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   PreferredSizeWidget _buildAppBar(BuildContext context) {
     return AppBar(
       title: GestureDetector(
@@ -274,6 +302,11 @@ class _ChatScreenState extends State<ChatScreen> {
               },
             );
           },
+        ),
+        IconButton(
+          icon: const Icon(Icons.logout_rounded, size: 22),
+          tooltip: '로그아웃',
+          onPressed: () => _showLogoutDialog(context),
         ),
       ],
     );

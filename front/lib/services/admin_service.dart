@@ -4,13 +4,21 @@ import '../models/admin_models.dart';
 
 class AdminApiService {
   final String baseUrl;
+  String? _token;
 
-  AdminApiService({required this.baseUrl});
+  AdminApiService({required this.baseUrl, String? token}) : _token = token;
+
+  void setToken(String? token) => _token = token;
+
+  Map<String, String> get _headers => {
+        'Content-Type': 'application/json',
+        if (_token != null) 'Authorization': 'Bearer $_token',
+      };
 
   Future<VideoStatusResponse> getVideoStatus() async {
     try {
       final response = await http
-          .get(Uri.parse('$baseUrl/api/admin/video-status'))
+          .get(Uri.parse('$baseUrl/api/admin/video-status'), headers: _headers)
           .timeout(const Duration(seconds: 60));
 
       if (response.statusCode == 200) {
@@ -27,7 +35,8 @@ class AdminApiService {
   Future<VideoStatusResponse> refreshVideoStatus() async {
     try {
       final response = await http
-          .post(Uri.parse('$baseUrl/api/admin/video-status/refresh'))
+          .post(Uri.parse('$baseUrl/api/admin/video-status/refresh'),
+              headers: _headers)
           .timeout(const Duration(seconds: 120));
 
       if (response.statusCode == 200) {
