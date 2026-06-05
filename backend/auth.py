@@ -250,7 +250,7 @@ def save_chat_message(
     sources:    dict,
     session_id: int | None = None,
 ):
-    """질문(user) + 답변(assistant)을 chat_messages에 저장합니다."""
+    """질문(user) + 답변(assistant)을 chat_messages 및 qa_logs에 저장합니다."""
     session_id = get_or_create_session(user_id, question, session_id)
 
     with get_conn() as conn:
@@ -271,6 +271,12 @@ def save_chat_message(
                 INSERT INTO chat_messages (session_id, role, content, sources)
                 VALUES (%s, 'assistant', %s, %s::jsonb)
             """, (session_id, answer, json.dumps(clean_sources, ensure_ascii=False)))
+
+            # qna: 질문/답변/날짜/사용자를 단순 flat 테이블에도 저장
+            cur.execute("""
+                INSERT INTO qna (user_id, question, answer)
+                VALUES (%s, %s, %s)
+            """, (user_id, question, answer))
 
             conn.commit()
 
