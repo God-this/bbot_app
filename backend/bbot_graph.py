@@ -1,7 +1,7 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-from typing import List, Literal
+from typing import Generator, List, Literal
 from typing_extensions import TypedDict
 
 from langchain_core.prompts import ChatPromptTemplate
@@ -513,3 +513,122 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
         )
 
     return answer, sources
+
+
+# ==================== Streaming Generate ====================
+
+def generate_stream(question: str, thread_id: str = "user_1") -> Generator[str, None, None]:
+    """답변을 SSE 형식으로 스트리밍. 토큰→[DONE]→[SOURCES]→[SESSION] 순서로 yield"""
+
+    if not is_creation_question(question):
+        yield "data: 창조과학 질문만 처리합니다.\n\n"
+        yield "data: [DONE]\n\n"
+        return
+
+    normalize_query(question)
+
+    graph = create_graph()
+    graph_result = graph.invoke(
+        {
+            "question": question,
+            "rewritten_question": "",
+            "route": "",
+            "documents": [],
+            "judgement": "",
+            "iteration": 0,
+            "chat_history": []
+        },
+        {"configurable": {"thread_id": thread_id}}
+    )
+
+    all_docs     = graph_result.get("documents", [])
+    judgement    = graph_result.get("judgement", "")
+    chat_history = graph_result.get("chat_history", [])
+    history_text = format_chat_history(chat_history)
+
+    if judgement == "not_resolved" or not all_docs:
+        msg = (
+            "제공된 자료만으로는 충분히 신뢰할 수 있는 답변을 드리기 어렵습니다. "
+            "질문을 조금 더 구체적으로 작성해 주시면 더 정확한 답변을 드릴 수 있습니다."
+        )
+        yield f"data: {msg}\n\n"
+        yield "data: [DONE]\n\n"
+        return
+
+    all_docs = rerank_documents(question, all_docs, top_k=5)
+
+    web_docs, book_docs, video_docs = [], [], []
+    for doc in all_docs:
+        if "start" in doc and "end" in doc:
+            doc.setdefault("type", "video"); video_docs.append(doc)
+        elif "book" in doc:
+            doc.setdefault("type", "book");  book_docs.append(doc)
+        elif "url" in doc:
+            doc.setdefault("type", "web");   web_docs.append(doc)
+
+    lang_instruction = (
+        "한국어로 답변하세요." if detect_language(question) == "ko" else "Answer in English."
+    )
+    context_parts = []
+    if video_docs:
+        context_parts.append("🎬 Video Resources")
+        for i, doc in enumerate(video_docs, 1):
+            context_parts.append(f"[Video {i}] {doc.get('title','')} ({format_timedelta(doc.get('start',0))} ~ {format_timedelta(doc.get('end',0))})")
+            context_parts.append(doc.get("content", "")[:800])
+    if web_docs:
+        context_parts.append("📰 Web Resources")
+        for i, doc in enumerate(web_docs, 1):
+            context_parts.append(f"[Web {i}] {doc.get('title','')}")
+            context_parts.append(doc.get("content", "")[:800])
+    if book_docs:
+        context_parts.append("📖 Book Resources")
+        for i, doc in enumerate(book_docs, 1):
+            context_parts.append(f"[{doc.get('book','')} p{doc.get('page','')}]")
+            context_parts.append(doc.get("content", "")[:800])
+    context = "\n".join(context_parts)
+
+    system_prompt = f"""[Role & Identity]
+당신은 '성경적 창조론 가이드'입니다. 당신은 모든 사물과 생명이 하나님의 지혜와 설계에 의해 창조되었다는 확고한 기독교 세계관을 가지고 답변합니다. 사용자의 과학적, 신학적 질문에 대해 성경의 권위를 인정하며 창조과학적 관점에서 답변을 제공하는 것이 당신의 사명입니다.
+
+[Core Principles]
+1. 성경적 우선순위: 성경(특히 창세기)의 기록을 역사적 사실로 전제합니다.
+2. 창조론적 해석: 자연계의 복잡성을 '지적 설계'의 증거로 설명합니다.
+3. RAG 컨텍스트 준수: 검색된 창조과학적 자료의 관점을 따릅니다.
+
+[Response Strategy]
+1. 정중하고 신앙적으로 격려하는 어조를 유지하십시오.
+2. 진화론을 유일한 과학적 사실로 긍정하지 마십시오.
+3. 검색된 데이터에 기반한 구체적인 사례를 언급하십시오.
+4. 답변의 끝에는 관련된 성경 구절을 인용하십시오.
+
+[Constraint]
+- 기독교 세계관에 반하는 가치관을 정답으로 제시하지 마십시오.
+- 성경의 기록을 신화나 상징으로 격하시키는 표현을 사용하지 마십시오.
+
+{lang_instruction}"""
+
+    stream = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"[이전 대화]\n{history_text}\n\n[자료]\n{context}\n\n[질문]\n{question}"}
+        ],
+        temperature=0,
+        stream=True,
+    )
+
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta:
+            safe = delta.replace("\n", "\\n")
+            yield f"data: {safe}\n\n"
+
+    yield "data: [DONE]\n\n"
+
+    sources = {
+        "web_docs":   web_docs,
+        "book_docs":  book_docs,
+        "video_docs": video_docs,
+        "top_sources": all_docs,
+    }
+    yield f"data: [SOURCES]{json.dumps(sources, ensure_ascii=False)}\n\n"
