@@ -15,6 +15,8 @@ langchain-upstage==0.6.0
 langchain-experimental==0.3.4
 langgraph==1.1.2
 
+sentence-transformers==3.4.1
+
 # ========== Embedding & Vector ==========
 tiktoken==0.12.0
 
