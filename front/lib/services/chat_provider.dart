@@ -50,49 +50,52 @@ class ChatProvider extends ChangeNotifier {
     );
     _messages.add(userMsg);
 
-    final loadingMsg = ChatMessage(
-      id:        _uuid.v4(),
+    final botMsgId = _uuid.v4();
+    _messages.add(ChatMessage(
+      id:        botMsgId,
       content:   '',
       isUser:    false,
       timestamp: DateTime.now(),
       isLoading: true,
-    );
-    _messages.add(loadingMsg);
+    ));
     _isTyping = true;
     notifyListeners();
 
     try {
-      final result = await _api.sendQuestion(
+      final result = await _api.sendQuestionStream(
         text.trim(),
         sessionId: _activeSessionId,
+        onToken: (token) {
+          final idx = _messages.indexWhere((m) => m.id == botMsgId);
+          if (idx != -1) {
+            _messages[idx] = _messages[idx].copyWith(
+              content:   _messages[idx].content + token,
+              isLoading: false,
+            );
+            notifyListeners();
+          }
+        },
       );
 
-      // 백엔드에서 확정된 session_id를 저장
       if (result.sessionId != null) _activeSessionId = result.sessionId;
 
-      final index = _messages.indexWhere((m) => m.id == loadingMsg.id);
-      if (index != -1) {
-        _messages[index] = ChatMessage(
-          id:        loadingMsg.id,
-          content:   result.answer,
-          isUser:    false,
-          timestamp: DateTime.now(),
+      final idx = _messages.indexWhere((m) => m.id == botMsgId);
+      if (idx != -1) {
+        _messages[idx] = _messages[idx].copyWith(
           sources:   result.sources,
+          isLoading: false,
         );
       }
     } on AuthException {
-      // 토큰 만료: 로그아웃 처리
-      _messages.removeWhere((m) => m.id == loadingMsg.id || m.id == userMsg.id);
+      _messages.removeWhere((m) => m.id == botMsgId || m.id == userMsg.id);
       await _auth.onUnauthorized();
       return;
     } catch (e) {
-      final index = _messages.indexWhere((m) => m.id == loadingMsg.id);
-      if (index != -1) {
-        _messages[index] = ChatMessage(
-          id:        loadingMsg.id,
+      final idx = _messages.indexWhere((m) => m.id == botMsgId);
+      if (idx != -1) {
+        _messages[idx] = _messages[idx].copyWith(
           content:   '죄송합니다. 답변을 생성하는 중 오류가 발생했습니다.\n다시 시도해 주세요.',
-          isUser:    false,
-          timestamp: DateTime.now(),
+          isLoading: false,
         );
       }
       _error = e.toString();
