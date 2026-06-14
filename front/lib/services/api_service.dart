@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/chat_models.dart';
@@ -68,6 +69,82 @@ class BeBotApiService {
     } catch (e) {
       throw Exception('네트워크 오류: $e');
     }
+  }
+
+  /// 스트리밍 질문 전송 — 토큰을 onToken 콜백으로 실시간 전달
+  Future<({SourceInfo sources, int? sessionId})> sendQuestionStream(
+    String question, {
+    int? sessionId,
+    required void Function(String token) onToken,
+  }) async {
+    final body = <String, dynamic>{'question': question};
+    if (sessionId != null) body['session_id'] = sessionId;
+
+    final request = http.Request('POST', Uri.parse('$baseUrl/api/chat/stream'))
+      ..headers.addAll(_headers)
+      ..body = jsonEncode(body);
+
+    final streamedResponse = await request.send();
+
+    if (streamedResponse.statusCode == 401) throw const AuthException();
+    if (streamedResponse.statusCode != 200) {
+      throw Exception('서버 오류: ${streamedResponse.statusCode}');
+    }
+
+    SourceInfo sources = SourceInfo();
+    int? newSessionId;
+
+    final completer = Completer<void>();
+    final buffer = StringBuffer();
+
+    streamedResponse.stream.transform(utf8.decoder).listen(
+      (chunk) {
+        buffer.write(chunk);
+        final raw = buffer.toString();
+        final events = raw.split('\n\n');
+        buffer.clear();
+        if (!raw.endsWith('\n\n')) {
+          buffer.write(events.removeLast());
+        }
+
+        for (final event in events) {
+          if (event.isEmpty) continue;
+          final data = event.replaceFirst('data: ', '');
+
+          if (data == '[DONE]') {
+            // 완료 신호
+          } else if (data.startsWith('[SOURCES]')) {
+            final jsonStr = data.replaceFirst('[SOURCES]', '');
+            try {
+              final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+              sources = _parseSourceInfoFromMap(map);
+            } catch (_) {}
+          } else if (data.startsWith('[SESSION]')) {
+            newSessionId = int.tryParse(data.replaceFirst('[SESSION]', ''));
+          } else {
+            onToken(data.replaceAll('\\n', '\n'));
+          }
+        }
+      },
+      onDone: () => completer.complete(),
+      onError: (e) => completer.completeError(e),
+    );
+
+    await completer.future;
+    return (sources: sources, sessionId: newSessionId);
+  }
+
+  SourceInfo _parseSourceInfoFromMap(Map<String, dynamic> map) {
+    final web = (map['web_docs'] as List<dynamic>? ?? [])
+        .map((d) => WebSource.fromMap(d as Map<String, dynamic>))
+        .toList();
+    final book = (map['book_docs'] as List<dynamic>? ?? [])
+        .map((d) => BookSource.fromMap(d as Map<String, dynamic>))
+        .toList();
+    final video = (map['video_docs'] as List<dynamic>? ?? [])
+        .map((d) => VideoSource.fromMap(d as Map<String, dynamic>))
+        .toList();
+    return SourceInfo(webSources: web, bookSources: book, videoSources: video);
   }
 
   /// 내 대화 세션 목록 조회
