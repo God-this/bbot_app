@@ -12,6 +12,7 @@
 #   POST /api/admin/video-status/refresh         — 영상 상태 즉시 재확인 [관리자 JWT 필요]
 
 import sys
+import json
 import asyncio
 from pathlib import Path
 from datetime import datetime
@@ -21,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -184,6 +186,58 @@ async def chat(
     except Exception as e:
         print(f"❌ 답변 생성 오류: {e}")
         raise HTTPException(status_code=500, detail=f"답변 생성 중 오류 발생: {str(e)}")
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(
+    req:  ChatRequest,
+    user: dict = Depends(get_current_user),
+):
+    if not req.question.strip():
+        raise HTTPException(status_code=400, detail="질문이 비어있습니다.")
+
+    from bbot_graph import generate_stream
+
+    async def event_generator():
+        gen = generate_stream(req.question.strip(), thread_id=f"user_{user['user_id']}")
+
+        full_answer = ""
+        sources_raw = {}
+
+        for chunk in gen:
+            if chunk.startswith("data: [SOURCES]"):
+                json_str = chunk.replace("data: [SOURCES]", "").strip()
+                try:
+                    sources_raw = json.loads(json_str)
+                except Exception:
+                    pass
+            elif chunk.startswith("data: [DONE]"):
+                try:
+                    session_id = save_chat_message(
+                        user_id    = user["user_id"],
+                        question   = req.question.strip(),
+                        answer     = full_answer,
+                        sources    = sources_raw,
+                        session_id = req.session_id,
+                    )
+                    yield f"data: [SESSION]{session_id}\n\n"
+                except Exception as e:
+                    print(f"⚠️ 채팅 기록 저장 실패: {e}")
+            else:
+                token = chunk.replace("data: ", "").replace("\n\n", "")
+                full_answer += token.replace("\\n", "\n")
+
+            yield chunk
+            await asyncio.sleep(0)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ──────────────────────────────────────────────────────────
