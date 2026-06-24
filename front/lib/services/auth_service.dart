@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -12,8 +13,9 @@ class AuthService {
 
   final _googleSignIn = GoogleSignIn(
     scopes: ['email', 'profile'],
-    clientId:
-        '470638733275-k58682cvnitqo41deodp0a2fk778e6am.apps.googleusercontent.com',
+    clientId: kIsWeb
+        ? '470638733275-cud88egkutov2ls7hq2uivlu9ieb2ic5.apps.googleusercontent.com'
+        : '470638733275-k58682cvnitqo41deodp0a2fk778e6am.apps.googleusercontent.com',
   );
 
   AuthService({required this.baseUrl});
