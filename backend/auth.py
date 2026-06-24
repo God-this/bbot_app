@@ -118,7 +118,8 @@ def upsert_user(
 # ──────────────────────────────────────────────────────────
 
 class GoogleLoginRequest(BaseModel):
-    id_token: str  # Flutter google_sign_in 패키지에서 받은 idToken
+    id_token: Optional[str] = None      # iOS/Android: idToken
+    access_token: Optional[str] = None  # Web: accessToken (signIn() 팝업 플로우)
 
 
 # ──────────────────────────────────────────────────────────
@@ -128,18 +129,22 @@ class GoogleLoginRequest(BaseModel):
 @router.post("/google")
 async def google_login(req: GoogleLoginRequest):
     """
-    Flutter에서 전달받은 Google idToken을 검증하고 JWT를 발급합니다.
+    Flutter에서 전달받은 Google 토큰을 검증하고 JWT를 발급합니다.
 
     Flow:
-      1. Google tokeninfo API로 idToken 유효성 검증
+      1. Google tokeninfo API로 토큰 유효성 검증 (id_token 또는 access_token)
       2. users 테이블 upsert
       3. JWT 발급 후 반환
     """
+    if not req.id_token and not req.access_token:
+        raise HTTPException(status_code=400, detail="id_token 또는 access_token이 필요합니다.")
+
     # Google 공식 tokeninfo 엔드포인트로 검증
+    params = {"id_token": req.id_token} if req.id_token else {"access_token": req.access_token}
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.get(
             "https://oauth2.googleapis.com/tokeninfo",
-            params={"id_token": req.id_token},
+            params=params,
         )
 
     if resp.status_code != 200:

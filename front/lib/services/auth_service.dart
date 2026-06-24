@@ -63,13 +63,23 @@ class AuthService {
     if (account == null) return null; // 사용자가 취소
 
     final auth = await account.authentication;
-    final idToken = auth.idToken;
-    if (idToken == null) throw Exception('Google idToken을 가져올 수 없습니다.');
+
+    // 웹은 signIn() 팝업 플로우에서 idToken이 null이므로 accessToken 사용
+    final Map<String, String> tokenBody;
+    if (kIsWeb) {
+      final accessToken = auth.accessToken;
+      if (accessToken == null) throw Exception('Google accessToken을 가져올 수 없습니다.');
+      tokenBody = {'access_token': accessToken};
+    } else {
+      final idToken = auth.idToken;
+      if (idToken == null) throw Exception('Google idToken을 가져올 수 없습니다.');
+      tokenBody = {'id_token': idToken};
+    }
 
     final resp = await http.post(
       Uri.parse('$baseUrl/api/auth/google'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'id_token': idToken}),
+      body: jsonEncode(tokenBody),
     );
 
     if (resp.statusCode != 200) {
