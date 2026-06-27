@@ -276,12 +276,23 @@ LLM 답변 생성 (이전 대화 히스토리 포함)
 
 PostgreSQL + pgvector를 사용합니다.
 
+### 검색 데이터
+
 | 테이블         | 주요 컬럼                                                                       |
 | -------------- | ------------------------------------------------------------------------------- |
 | `crawled_data` | title, url, content, content_embedding (vector)                                 |
 | `book_en`      | book_name, page_num, content, embedding (vector)                                |
 | `book_ko`      | book_name, page_num, content, embedding (vector)                                |
 | `video_db`     | video_id, title, start_time, end_time, url, content, content_embedding (vector) |
+
+### 사용자 및 채팅 기록
+
+| 테이블          | 주요 컬럼                                                                 |
+| --------------- | ------------------------------------------------------------------------- |
+| `users`         | id, provider, provider_id, email, nickname, profile_img, role, created_at |
+| `chat_sessions` | id, user_id, title                                                        |
+| `chat_messages` | id, session_id, role, content, sources, created_at                        |
+| `qna`           | user_id, question, answer                                                 |
 
 ---
 
