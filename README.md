@@ -117,8 +117,15 @@ bbot_app/
 ```bash
 cd backend
 
-# 의존성 설치
+# 1. torch 먼저 CPU 버전으로 설치
+pip install torch==2.12.1+cpu --index-url https://download.pytorch.org/whl/cpu
+
+# 2. 나머지 패키지 설치
 pip install -r requirements.txt
+
+# 3. langchain-protocol 패치 (Python 3.11 호환)
+sed -i 's/, extra_items=[^)]*//g' \
+  venv/lib/python3.11/site-packages/langchain_protocol/protocol.py
 
 # 환경변수 설정
 cp .env.example .env
