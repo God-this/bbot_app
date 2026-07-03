@@ -36,7 +36,7 @@ def save_semantic_cache(query, data):
     print("💾 Semantic Cache Saved to Redis!")
 
 
-def search_semantic_cache(query, threshold=0.85):
+def search_semantic_cache(query, threshold=0.99):
     query_embedding = get_embedding(query)
 
     best_score = 0
