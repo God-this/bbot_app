@@ -534,7 +534,7 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
 
 # ==================== Streaming Generate ====================
 
-def generate_stream(question: str, thread_id: str = "user_1") -> Generator[str, None, None]:
+def generate_stream(question: str, thread_id: str = "user_1", use_cache: bool = USE_CACHE) -> Generator[str, None, None]:
     """답변을 SSE 형식으로 스트리밍. 토큰→[DONE]→[SOURCES]→[SESSION] 순서로 yield"""
 
     if not is_creation_question(question):
@@ -542,7 +542,28 @@ def generate_stream(question: str, thread_id: str = "user_1") -> Generator[str, 
         yield "data: [DONE]\n\n"
         return
 
-    normalize_query(question)
+    normalized_question = normalize_query(question)
+
+    # ---------- 캐시 조회 ----------
+    if use_cache:
+        cached = get_cached_answer(normalized_question)
+        if not cached:
+            cached = search_semantic_cache(question)
+
+        if cached:
+            print(f"⚡ Cache Hit (stream) — question: {question}")
+            answer = cached["answer"]
+            sources = cached["sources"]
+
+            # 저장된 답변을 chunk 단위로 스트리밍 (기존 프론트 파싱 방식 유지)
+            for i in range(0, len(answer), 20):
+                piece = answer[i:i+20].replace("\n", "\\n")
+                yield f"data: {piece}\n\n"
+
+            yield "data: [DONE]\n\n"
+            yield f"data: [SOURCES]{json.dumps(sources, ensure_ascii=False)}\n\n"
+            return
+    # ---------- 캐시 조회 끝 ----------
 
     graph = create_graph()
     graph_result = graph.invoke(
@@ -634,9 +655,11 @@ def generate_stream(question: str, thread_id: str = "user_1") -> Generator[str, 
         stream=True,
     )
 
+    full_answer = ""
     for chunk in stream:
         delta = chunk.choices[0].delta.content
         if delta:
+            full_answer += delta
             safe = delta.replace("\n", "\\n")
             yield f"data: {safe}\n\n"
 
@@ -648,4 +671,11 @@ def generate_stream(question: str, thread_id: str = "user_1") -> Generator[str, 
         "video_docs": video_docs,
         "top_sources": all_docs,
     }
+
+    # ---------- 캐시 저장 ----------
+    if use_cache:
+        save_cached_answer(normalized_question, {"answer": full_answer, "sources": sources})
+        save_semantic_cache(question, {"answer": full_answer, "sources": sources})
+    # ---------- 캐시 저장 끝 ----------
+
     yield f"data: [SOURCES]{json.dumps(sources, ensure_ascii=False)}\n\n"
