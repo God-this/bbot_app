@@ -57,14 +57,17 @@ def search_semantic_cache(query, threshold=0.85):
             [stored_embedding]
         )[0][0]
 
+        print(f"🔍 [Semantic Cache] query='{item['query']}' | score={score:.4f} (threshold={threshold})")
+
         if score > best_score:
             best_score = score
             best_result = item
 
     if best_score >= threshold:
         print(
-            f"⚡ Semantic Cache Hit! score={best_score:.4f}"
+            f"⚡ Semantic Cache Hit! best_score={best_score:.4f} >= threshold={threshold}"
         )
         return best_result["data"]
 
+    print(f"❌ Semantic Cache Miss. best_score={best_score:.4f} < threshold={threshold}")
     return None

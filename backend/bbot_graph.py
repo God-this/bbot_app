@@ -25,8 +25,10 @@ import re
 _reranker = CrossEncoder("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1") # 다국어 모델
 
 try:
+    import redis as _redis_module
+    from sklearn.metrics.pairwise import cosine_similarity as _cosine_similarity
     from redis_cache import get_cached_answer, save_cached_answer
-    from redis_semantic_cache import search_semantic_cache, save_semantic_cache
+    from redis_semantic_cache import search_semantic_cache, save_semantic_cache, get_embedding
     _REDIS_AVAILABLE = True
 except ImportError:
     _REDIS_AVAILABLE = False
@@ -329,6 +331,21 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
         semantic_cached = search_semantic_cache(question)
         if semantic_cached:
             return semantic_cached["answer"], semantic_cached["sources"]
+    elif _REDIS_AVAILABLE:
+        # 캐시 비활성화 시에도 유사도 점수만 로그로 확인
+        _r = _redis_module.Redis(host="localhost", port=6379, db=0, decode_responses=True)
+        _keys = list(_r.scan_iter("semantic:*"))
+        if _keys:
+            _q_emb = get_embedding(question)
+            print("\n[Similarity Log (cache OFF)]")
+            for _key in _keys:
+                _raw = _r.get(_key)
+                if not _raw:
+                    continue
+                _item = json.loads(_raw)
+                _score = _cosine_similarity([_q_emb], [_item["embedding"]])[0][0]
+                print(f"  score={_score:.4f} | cached_query='{_item['query']}'")
+            print("")
 
 
     # LangGraph 실행
