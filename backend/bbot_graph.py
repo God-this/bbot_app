@@ -38,7 +38,7 @@ client = get_client()
 
 # ==================== Cache Toggle ====================
 
-USE_CACHE = False  # redis 모듈 없으면 자동 비활성화
+USE_CACHE = True  # redis 모듈 없으면 자동 비활성화
 
 # ==================== State ====================
 class GraphState(TypedDict):
