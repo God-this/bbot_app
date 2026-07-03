@@ -1,9 +1,9 @@
 import json
 import redis
-from langchain_openai import OpenAIEmbeddings
 from sklearn.metrics.pairwise import cosine_similarity
+from llm_factory import get_embedding as _get_embedding_model
 
-embedding_model = OpenAIEmbeddings()
+embedding_model = _get_embedding_model()
 
 r = redis.Redis(
     host="localhost",
