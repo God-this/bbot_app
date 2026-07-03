@@ -672,10 +672,15 @@ def generate_stream(question: str, thread_id: str = "user_1", use_cache: bool = 
         "top_sources": all_docs,
     }
 
-    # ---------- 캐시 저장 ----------
+    # ---------- 캐시 저장: 반드시 [DONE] yield 전에! ----------
     if use_cache:
-        save_cached_answer(normalized_question, {"answer": full_answer, "sources": sources})
-        save_semantic_cache(question, {"answer": full_answer, "sources": sources})
-    # ---------- 캐시 저장 끝 ----------
+        try:
+            save_cached_answer(normalized_question, {"answer": full_answer, "sources": sources})
+            save_semantic_cache(question, {"answer": full_answer, "sources": sources})
+            print(f"💾 캐시 저장 완료 — question: {question}")
+        except Exception as e:
+            print(f"❌ 캐시 저장 실패: {e}")
+    # ----------------------------------------------------------
 
+    yield "data: [DONE]\n\n"
     yield f"data: [SOURCES]{json.dumps(sources, ensure_ascii=False)}\n\n"
