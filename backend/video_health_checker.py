@@ -2,6 +2,9 @@ import os
 import re
 import requests
 from config import get_conn
+from logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class VideoHealthChecker:
@@ -16,7 +19,7 @@ class VideoHealthChecker:
                         );
                     """)
                     if not cur.fetchone()[0]:
-                        print("⚠️ video_db 테이블이 없습니다.")
+                        logger.warning("video_db 테이블이 없습니다.")
                         return []
 
                     cur.execute("""
@@ -27,7 +30,7 @@ class VideoHealthChecker:
                     """)
                     rows = cur.fetchall()
         except Exception as e:
-            print(f"⚠️ DB 조회 오류: {e}")
+            logger.error("DB 조회 오류: %s", e, exc_info=True)
             return []
 
         results = []

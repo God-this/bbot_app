@@ -20,6 +20,10 @@ from utils import detect_language, translate_to_english
 
 import re
 
+from logging_config import get_logger
+
+logger = get_logger(__name__)
+
 # ==================== Reranker ====================
 
 _reranker = CrossEncoder("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1") # 다국어 모델
@@ -136,7 +140,7 @@ def retrieve_all_documents_parallel(queries: list[str], top_k: int = 5):
     book_docs  = deduplicate_docs(book_docs)
     video_docs = deduplicate_docs(video_docs)
 
-    print("✅ Parallel search completed\n")
+    logger.info("Parallel search completed")
 
     return {
         "web_docs": web_docs,
@@ -147,7 +151,7 @@ def retrieve_all_documents_parallel(queries: list[str], top_k: int = 5):
 
 # ==================== Graph Nodes ====================
 def route_question(state: GraphState) -> GraphState:
-    print("[Router]")
+    logger.debug("[Router]")
 
     return {
         **state,
@@ -156,13 +160,13 @@ def route_question(state: GraphState) -> GraphState:
     }
 
 def retrieve_documents(state: GraphState) -> GraphState:
-    print("[Retrieve]")
+    logger.debug("[Retrieve]")
 
     query = state.get("rewritten_question") or state["question"]
     english_query = translate_to_english(query)
 
     queries = [query] if query == english_query else [query, english_query]
-    print(f"🔎 검색 쿼리: {queries}\n")
+    logger.debug("검색 쿼리: %s", queries)
 
     result = retrieve_all_documents_parallel(
         queries,
@@ -175,18 +179,18 @@ def retrieve_documents(state: GraphState) -> GraphState:
     }
 
 def judge_documents(state: GraphState) -> GraphState:
-    print("[Judge]")
+    logger.debug("[Judge]")
 
     docs = state.get("documents", [])
 
     if not docs:
-        print("[Judge] No documents → not_resolved\n")
+        logger.warning("[Judge] No documents → not_resolved")
         return {
             **state,
             "judgement": "not_resolved"
         }
 
-    print("[Judge] Documents found → resolved\n")
+    logger.debug("[Judge] Documents found → resolved")
 
     return {
         **state,
@@ -194,7 +198,7 @@ def judge_documents(state: GraphState) -> GraphState:
     }
 
 def rewrite_question(state: GraphState) -> GraphState:
-    print("✍️ [Rewrite]")
+    logger.info("[Rewrite]")
 
     question = state["question"]
     iteration = state.get("iteration", 0)
@@ -231,7 +235,7 @@ def rewrite_question(state: GraphState) -> GraphState:
         "question": question
     })
 
-    print(f"[Rewrite] Rewritten question: {rewritten}\n")
+    logger.debug("[Rewrite] Rewritten question: %s", rewritten)
 
     return {
         **state,
@@ -248,10 +252,10 @@ def decide_to_rewrite(
         state.get("judgement") == "not_resolved"
         and state.get("iteration", 0) < 2
     ):
-        print("✍️ [Decision] → Rewrite\n")
+        logger.debug("[Decision] → Rewrite")
         return "rewrite"
 
-    print("✅ [Decision] → Search completed\n")
+    logger.debug("[Decision] → Search completed")
     return "end"
 
 # ==================== Graph Build ====================
@@ -289,7 +293,7 @@ def rerank_documents(question: str, docs: list[dict], top_k: int = 5) -> list[di
     if not docs:
         return []
 
-    print(f"[Rerank] {len(docs)}개 문서 → top {top_k} 선별 중...\n")
+    logger.debug("[Rerank] %d개 문서 → top %d 선별 중...", len(docs), top_k)
 
     pairs = [(question, doc.get("content", "")) for doc in docs]
     scores = _reranker.predict(pairs)
@@ -299,28 +303,24 @@ def rerank_documents(question: str, docs: list[dict], top_k: int = 5) -> list[di
 
     ranked = sorted(docs, key=lambda x: x["rerank_score"], reverse=True)[:top_k]
 
-    print(f"✅ [Rerank] 완료 — top-{top_k} 결과:")
+    logger.info("[Rerank] 완료 — top-%d 결과:", top_k)
     for d in ranked:
         cosine_sim = 1 - d.get("score", 0)
-        print(f"  ▫️[{d.get('type', '?'):5}] cosine_sim={cosine_sim:.4f}  rerank={d['rerank_score']:.3f} //{d.get('title', d.get('book', ''))[:40]}")
-    print()
+        logger.debug("  [%s] cosine_sim=%.4f  rerank=%.3f // %s", d.get('type', '?'), cosine_sim, d['rerank_score'], d.get('title', d.get('book', ''))[:40])
 
     return ranked
 
 # ==================== Final Generate ====================
 
 def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CACHE):
-    print("\n" + "=" * 60)
-    print("===== Integrated Search Started =====")
-    print("=" * 60)
-    print(f"[Question]: {question}")
+    logger.info("===== Integrated Search Started ===== question=%s", question)
 
     if not is_creation_question(question):
         return "창조과학 질문만 처리합니다.", {}
 
     normalized_question = normalize_query(question)
 
-    print(f"[Normalized Query]: {normalized_question}\n")
+    logger.debug("[Normalized Query]: %s", normalized_question)
 
     if use_cache:
         # Exact Redis Cache 확인
@@ -337,15 +337,14 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
         _keys = list(_redis_client.scan_iter("semantic:*"))
         if _keys:
             _q_emb = get_embedding(question)
-            print("\n[Similarity Log (cache OFF)]")
+            logger.debug("[Similarity Log (cache OFF)]")
             for _key in _keys:
                 _raw = _redis_client.get(_key)
                 if not _raw:
                     continue
                 _item = json.loads(_raw)
                 _score = _cosine_similarity([_q_emb], [_item["embedding"]])[0][0]
-                print(f"  score={_score:.4f} | cached_query='{_item['query']}'")
-            print("")
+                logger.debug("  score=%.4f | cached_query='%s'", _score, _item['query'])
 
 
     # LangGraph 실행
@@ -374,7 +373,7 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
     history_text = format_chat_history(chat_history)
 
     if judgement == "not_resolved":
-        print("❌ 충분한 근거를 찾지 못함 → 답변 생성 중단\n")
+        logger.warning("충분한 근거를 찾지 못함 → 답변 생성 중단")
 
         return (
             "제공된 자료만으로는 충분히 신뢰할 수 있는 답변을 드리기 어렵습니다. "
@@ -407,7 +406,7 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
     # images 확인 로그
     for doc in book_docs:
         imgs = doc.get("images", [])
-        print(f"📘 [{doc.get('book')} p{doc.get('page')}] 이미지 {len(imgs)}개: {imgs}")
+        logger.debug("[%s p%s] 이미지 %d개: %s", doc.get('book'), doc.get('page'), len(imgs), imgs)
 
     lang_instruction = (
         "한국어로 답변하세요."
@@ -476,7 +475,7 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
 
 {lang_instruction}"""
 
-    print("\n[Generate]")
+    logger.debug("[Generate]")
 
     res = client.chat.completions.create(
         model=LLM_MODEL,
@@ -503,7 +502,7 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
         f"Assistant: {answer}"
     ]
 
-    print("✅ Integrated answer completed!\n")
+    logger.info("Integrated answer completed")
 
     sources = {
         "video_docs": video_docs,
@@ -551,7 +550,7 @@ def generate_stream(question: str, thread_id: str = "user_1", use_cache: bool = 
             cached = search_semantic_cache(question)
 
         if cached:
-            print(f"⚡ Cache Hit (stream) — question: {question}")
+            logger.info("Cache Hit (stream) — question: %s", question)
             answer = cached["answer"]
             sources = cached["sources"]
 
@@ -677,9 +676,9 @@ def generate_stream(question: str, thread_id: str = "user_1", use_cache: bool = 
         try:
             save_cached_answer(normalized_question, {"answer": full_answer, "sources": sources})
             save_semantic_cache(question, {"answer": full_answer, "sources": sources})
-            print(f"💾 캐시 저장 완료 — question: {question}")
+            logger.debug("캐시 저장 완료 — question: %s", question)
         except Exception as e:
-            print(f"❌ 캐시 저장 실패: {e}")
+            logger.error("캐시 저장 실패: %s", e, exc_info=True)
     # ----------------------------------------------------------
 
     yield "data: [DONE]\n\n"
