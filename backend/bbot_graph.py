@@ -16,7 +16,7 @@ from llm_factory import get_client
 from bbot_web import retrieve_web_documents
 from bbot_book import retrieve_pages
 from bbot_video import retrieve_video_segments
-from utils import detect_language, translate_to_english
+from utils import detect_language, translate_to_english, extract_final_answer, reasoning_kwargs
 
 import re
 
@@ -101,10 +101,12 @@ true 또는 false만 출력.
 """
             }
         ],
-        temperature=0
+        temperature=0,
+        **reasoning_kwargs(),
     )
 
-    return "true" in res.choices[0].message.content.lower()
+    answer = extract_final_answer(res.choices[0].message)
+    return "true" in answer.lower()
 
 # ==================== Parallel Retrieval ====================
 def deduplicate_docs(docs: list[dict]) -> list[dict]:
@@ -495,7 +497,7 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
         temperature=0
     )
 
-    answer = res.choices[0].message.content
+    answer = extract_final_answer(res.choices[0].message)
 
     updated_history = chat_history + [
         f"User: {question}",
@@ -652,6 +654,7 @@ def generate_stream(question: str, thread_id: str = "user_1", use_cache: bool = 
         ],
         temperature=0,
         stream=True,
+        **reasoning_kwargs(),
     )
 
     full_answer = ""
