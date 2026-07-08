@@ -11,6 +11,10 @@ import os
 import json
 import httpx
 
+from logging_config import get_logger
+
+logger = get_logger(__name__)
+
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -169,7 +173,7 @@ async def google_login(req: GoogleLoginRequest):
 
     token = create_access_token(user["id"], user["role"])
 
-    print(f"✅ Google 로그인: [{user['id']}] {info.get('email', '')} (role={user['role']})")
+    logger.info("Google 로그인: [%s] %s (role=%s)", user['id'], info.get('email', ''), user['role'])
 
     return {
         "access_token": token,

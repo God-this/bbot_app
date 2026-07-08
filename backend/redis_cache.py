@@ -2,6 +2,9 @@ import json
 import redis
 from sklearn.metrics.pairwise import cosine_similarity
 from llm_factory import get_embedding as _get_embedding_model
+from logging_config import get_logger
+
+logger = get_logger(__name__)
 
 embedding_model = _get_embedding_model()
 
@@ -52,7 +55,7 @@ def save_semantic_cache(query, data):
         json.dumps(payload, ensure_ascii=False)
     )
 
-    print("💾 Semantic Cache Saved to Redis!")
+    logger.debug("Semantic Cache Saved to Redis!")
 
 
 def search_semantic_cache(query, threshold=0.99):
@@ -74,15 +77,15 @@ def search_semantic_cache(query, threshold=0.99):
             [item["embedding"]]
         )[0][0]
 
-        print(f"🔍 [Semantic Cache] query='{item['query']}' | score={score:.4f} (threshold={threshold})")
+        logger.debug("[Semantic Cache] query='%s' | score=%.4f (threshold=%s)", item['query'], score, threshold)
 
         if score > best_score:
             best_score = score
             best_result = item
 
     if best_score >= threshold:
-        print(f"⚡ Semantic Cache Hit! best_score={best_score:.4f} >= threshold={threshold}")
+        logger.debug("Semantic Cache Hit! best_score=%.4f >= threshold=%s", best_score, threshold)
         return best_result["data"]
 
-    print(f"❌ Semantic Cache Miss. best_score={best_score:.4f} < threshold={threshold}")
+    logger.debug("Semantic Cache Miss. best_score=%.4f < threshold=%s", best_score, threshold)
     return None

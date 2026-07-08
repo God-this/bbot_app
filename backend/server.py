@@ -20,6 +20,10 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from logging_config import get_logger
+
+logger = get_logger(__name__)
+
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -90,9 +94,9 @@ async def _refresh_video_status():
             })
         _video_status_cache["data"]       = results
         _video_status_cache["checked_at"] = datetime.now().isoformat()
-        print(f"✅ 영상 상태 갱신 완료: {len(results)}건")
+        logger.info("영상 상태 갱신 완료: %d건", len(results))
     except Exception as e:
-        print(f"❌ 영상 상태 갱신 오류: {e}")
+        logger.error("영상 상태 갱신 오류: %s", e, exc_info=True)
 
 
 async def _video_status_scheduler():
@@ -173,7 +177,7 @@ async def chat(
                 session_id = req.session_id,
             )
         except Exception as save_err:
-            print(f"⚠️ 채팅 기록 저장 실패: {save_err}")
+            logger.warning("채팅 기록 저장 실패: %s", save_err)
 
         return ChatResponse(
             answer      = answer,
@@ -184,7 +188,7 @@ async def chat(
         )
 
     except Exception as e:
-        print(f"❌ 답변 생성 오류: {e}")
+        logger.error("답변 생성 오류: %s", e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"답변 생성 중 오류 발생: {str(e)}")
 
 
@@ -222,7 +226,7 @@ async def chat_stream(
                     )
                     yield f"data: [SESSION]{session_id}\n\n"
                 except Exception as e:
-                    print(f"⚠️ 채팅 기록 저장 실패: {e}")
+                    logger.warning("채팅 기록 저장 실패: %s", e)
             else:
                 token = chunk.replace("data: ", "").replace("\n\n", "")
                 full_answer += token.replace("\\n", "\n")
