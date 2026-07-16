@@ -28,6 +28,39 @@ logger = get_logger(__name__)
 
 _reranker = CrossEncoder("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1") # 다국어 모델
 
+# ==================== [임시] 궁금해궁금해 → 구매 링크 처리 ====================
+# TODO: 임시 조치. 책 페이지 출처 대신 구매 링크(웹 출처 형태)로 노출.
+# 되돌릴 때는 이 블록과 classify_documents() 내 관련 분기만 제거하면 됨.
+GUNGGEUM_BOOK_NAME = "궁금해궁금해"
+GUNGGEUM_PURCHASE_URL = "https://www.yes24.com/product/goods/85464691"
+
+
+def classify_documents(docs: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
+    """문서 리스트를 web / book / video로 분류.
+
+    [임시] book_name이 '궁금해궁금해'인 문서는 book이 아니라 web 취급하여
+    페이지 정보 대신 구매 링크를 보여줌.
+    """
+    web_docs, book_docs, video_docs = [], [], []
+
+    for doc in docs:
+        if "start" in doc and "end" in doc:
+            doc.setdefault("type", "video")
+            video_docs.append(doc)
+        elif "book" in doc and doc.get("book") == GUNGGEUM_BOOK_NAME:
+            doc["type"] = "web"
+            doc["title"] = doc.get("book", GUNGGEUM_BOOK_NAME)
+            doc["url"] = GUNGGEUM_PURCHASE_URL
+            web_docs.append(doc)
+        elif "book" in doc:
+            doc.setdefault("type", "book")
+            book_docs.append(doc)
+        elif "url" in doc:
+            doc.setdefault("type", "web")
+            web_docs.append(doc)
+
+    return web_docs, book_docs, video_docs
+
 try:
     from redis_cache import (
         get_cached_answer, save_cached_answer,
@@ -390,20 +423,7 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
     all_docs = rerank_documents(question, all_docs, top_k=5)
 
     # 중요: video 먼저 분류
-    web_docs = []
-    book_docs = []
-    video_docs = []
-
-    for doc in all_docs:
-        if "start" in doc and "end" in doc:
-            doc.setdefault("type", "video")
-            video_docs.append(doc)
-        elif "book" in doc:
-            doc.setdefault("type", "book")
-            book_docs.append(doc)
-        elif "url" in doc:
-            doc.setdefault("type", "web")
-            web_docs.append(doc)
+    web_docs, book_docs, video_docs = classify_documents(all_docs)
 
     # images 확인 로그
     for doc in book_docs:
@@ -596,14 +616,7 @@ def generate_stream(question: str, thread_id: str = "user_1", use_cache: bool = 
 
     all_docs = rerank_documents(question, all_docs, top_k=5)
 
-    web_docs, book_docs, video_docs = [], [], []
-    for doc in all_docs:
-        if "start" in doc and "end" in doc:
-            doc.setdefault("type", "video"); video_docs.append(doc)
-        elif "book" in doc:
-            doc.setdefault("type", "book");  book_docs.append(doc)
-        elif "url" in doc:
-            doc.setdefault("type", "web");   web_docs.append(doc)
+    web_docs, book_docs, video_docs = classify_documents(all_docs)
 
     lang_instruction = (
         "한국어로 답변하세요." if detect_language(question) == "ko" else "Answer in English."
