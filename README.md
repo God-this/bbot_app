@@ -292,8 +292,6 @@ PostgreSQL + pgvector를 사용합니다.
 | `users`         | id, provider, provider_id, email, nickname, profile_img, role, created_at |
 | `chat_sessions` | id, user_id, title                                                        |
 | `chat_messages` | id, session_id, role, content, sources, created_at                        |
-| `qna`           | user_id, question, answer                                                 |
-
 ---
 
 ## LLM 전환

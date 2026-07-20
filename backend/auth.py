@@ -281,12 +281,6 @@ def save_chat_message(
                 VALUES (%s, 'assistant', %s, %s::jsonb)
             """, (session_id, answer, json.dumps(clean_sources, ensure_ascii=False)))
 
-            # qna: 질문/답변/날짜/사용자를 단순 flat 테이블에도 저장
-            cur.execute("""
-                INSERT INTO qna (user_id, question, answer)
-                VALUES (%s, %s, %s)
-            """, (user_id, question, answer))
-
             conn.commit()
 
     return session_id
