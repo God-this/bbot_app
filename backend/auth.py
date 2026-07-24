@@ -1,7 +1,8 @@
-# auth.py — 인증 라우터 (Google 소셜 로그인 + JWT)
+# auth.py — 인증 라우터 (Google 소셜 로그인 + 게스트 로그인 + JWT)
 #
 # 엔드포인트:
 #   POST /api/auth/google          — Google idToken 검증 → JWT 발급
+#   POST /api/auth/guest           — device_id 기반 게스트 로그인 → JWT 발급
 #   GET  /api/auth/me              — 내 정보 조회 (JWT 필요)
 #   GET  /api/chat/sessions        — 내 대화 세션 목록 (JWT 필요)
 #   GET  /api/chat/sessions/{id}/messages — 세션 메시지 조회 (JWT 필요)
@@ -10,10 +11,6 @@
 import os
 import json
 import httpx
-
-from logging_config import get_logger
-
-logger = get_logger(__name__)
 
 from datetime import datetime, timedelta
 from typing import Optional
@@ -91,7 +88,7 @@ def upsert_user(
     profile_img: str,
 ) -> dict:
     """
-    소셜 로그인 시 사용자 정보를 upsert합니다.
+    소셜/게스트 로그인 시 사용자 정보를 upsert합니다.
     - 최초 로그인: INSERT (role='user')
     - 재로그인: 이메일/닉네임/프로필 이미지만 UPDATE (role은 유지)
     """
@@ -122,8 +119,11 @@ def upsert_user(
 # ──────────────────────────────────────────────────────────
 
 class GoogleLoginRequest(BaseModel):
-    id_token: Optional[str] = None      # iOS/Android: idToken
-    access_token: Optional[str] = None  # Web: accessToken (signIn() 팝업 플로우)
+    id_token: str  # Flutter google_sign_in 패키지에서 받은 idToken
+
+
+class GuestLoginRequest(BaseModel):
+    device_id: str  # 클라이언트가 로컬에 생성/저장한 UUID (재실행해도 동일 게스트 유지용)
 
 
 # ──────────────────────────────────────────────────────────
@@ -133,22 +133,18 @@ class GoogleLoginRequest(BaseModel):
 @router.post("/google")
 async def google_login(req: GoogleLoginRequest):
     """
-    Flutter에서 전달받은 Google 토큰을 검증하고 JWT를 발급합니다.
+    Flutter에서 전달받은 Google idToken을 검증하고 JWT를 발급합니다.
 
     Flow:
-      1. Google tokeninfo API로 토큰 유효성 검증 (id_token 또는 access_token)
+      1. Google tokeninfo API로 idToken 유효성 검증
       2. users 테이블 upsert
       3. JWT 발급 후 반환
     """
-    if not req.id_token and not req.access_token:
-        raise HTTPException(status_code=400, detail="id_token 또는 access_token이 필요합니다.")
-
     # Google 공식 tokeninfo 엔드포인트로 검증
-    params = {"id_token": req.id_token} if req.id_token else {"access_token": req.access_token}
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.get(
             "https://oauth2.googleapis.com/tokeninfo",
-            params=params,
+            params={"id_token": req.id_token},
         )
 
     if resp.status_code != 200:
@@ -173,7 +169,7 @@ async def google_login(req: GoogleLoginRequest):
 
     token = create_access_token(user["id"], user["role"])
 
-    logger.info("Google 로그인: [%s] %s (role=%s)", user['id'], info.get('email', ''), user['role'])
+    print(f"✅ Google 로그인: [{user['id']}] {info.get('email', '')} (role={user['role']})")
 
     return {
         "access_token": token,
@@ -183,6 +179,40 @@ async def google_login(req: GoogleLoginRequest):
         "nickname":     user["nickname"],
         "profile_img":  user["profile_img"],
         "email":        info.get("email", ""),
+    }
+
+
+@router.post("/guest")
+async def guest_login(req: GuestLoginRequest):
+    """
+    비회원(게스트) 로그인. 외부 검증 없이 클라이언트가 보낸 device_id를
+    provider_id로 사용해 users 테이블에 upsert하고 JWT를 발급합니다.
+
+    같은 device_id로 다시 호출하면 같은 게스트 계정(대화 기록 유지)으로 로그인됩니다.
+    """
+    if not req.device_id or not req.device_id.strip():
+        raise HTTPException(status_code=400, detail="device_id가 필요합니다.")
+
+    user = upsert_user(
+        provider    = "guest",
+        provider_id = req.device_id.strip(),
+        email       = "",
+        nickname    = "게스트",
+        profile_img = "",
+    )
+
+    token = create_access_token(user["id"], user["role"])
+
+    print(f"✅ 게스트 로그인: [{user['id']}] device_id={req.device_id} (role={user['role']})")
+
+    return {
+        "access_token": token,
+        "token_type":   "bearer",
+        "user_id":      user["id"],
+        "role":         user["role"],
+        "nickname":     user["nickname"],
+        "profile_img":  user["profile_img"],
+        "email":        "",
     }
 
 
@@ -259,7 +289,7 @@ def save_chat_message(
     sources:    dict,
     session_id: int | None = None,
 ):
-    """질문(user) + 답변(assistant)을 chat_messages 및 qa_logs에 저장합니다."""
+    """질문(user) + 답변(assistant)을 chat_messages에 저장합니다."""
     session_id = get_or_create_session(user_id, question, session_id)
 
     with get_conn() as conn:
