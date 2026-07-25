@@ -27,6 +27,19 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<void> _handleGuestContinue() async {
+    setState(() { _loading = true; _error = null; });
+    try {
+      await context.read<AuthProvider>().continueAsGuest();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _error = e.toString());
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -82,12 +95,28 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ),
 
-                // Google 로그인 버튼
+                // Google 로그인 버튼 / 게스트 버튼
                 _loading
                     ? const CircularProgressIndicator(
                         color: AppColors.primary,
                       )
-                    : _GoogleSignInButton(onTap: _handleGoogleSignIn),
+                    : Column(
+                        children: [
+                          _GoogleSignInButton(onTap: _handleGoogleSignIn),
+                          const SizedBox(height: 12),
+                          TextButton(
+                            onPressed: _handleGuestContinue,
+                            child: Text(
+                              '로그인 없이 질문하기',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: AppColors.textSecondary,
+                                decoration: TextDecoration.underline,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
 
                 const SizedBox(height: 24),
                 Text(
@@ -126,7 +155,6 @@ class _GoogleSignInButton extends StatelessWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Google 'G' 아이콘
             Container(
               width: 22,
               height: 22,
