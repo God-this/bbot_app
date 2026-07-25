@@ -58,3 +58,5 @@ ios/Flutter/App.framework
 # Android 서명키 (배포 시 민감)
 android/key.properties
 android/app/*.jks
+key.properties
+*.keystore
