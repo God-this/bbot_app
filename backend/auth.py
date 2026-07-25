@@ -21,6 +21,9 @@ from jose import JWTError, jwt
 from pydantic import BaseModel
 
 from config import get_conn
+from logging_config import get_logger
+
+logger = get_logger(__name__)
 
 # ──────────────────────────────────────────────────────────
 # 설정값 (환경변수)
@@ -169,7 +172,7 @@ async def google_login(req: GoogleLoginRequest):
 
     token = create_access_token(user["id"], user["role"])
 
-    print(f"✅ Google 로그인: [{user['id']}] {info.get('email', '')} (role={user['role']})")
+    logger.info("Google 로그인: [%s] %s (role=%s)", user["id"], info.get("email", ""), user["role"])
 
     return {
         "access_token": token,
@@ -203,7 +206,7 @@ async def guest_login(req: GuestLoginRequest):
 
     token = create_access_token(user["id"], user["role"])
 
-    print(f"✅ 게스트 로그인: [{user['id']}] device_id={req.device_id} (role={user['role']})")
+    logger.info("게스트 로그인: [%s] device_id=%s (role=%s)", user["id"], req.device_id, user["role"])
 
     return {
         "access_token": token,
