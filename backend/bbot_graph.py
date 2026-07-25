@@ -63,8 +63,8 @@ def classify_documents(docs: list[dict]) -> tuple[list[dict], list[dict], list[d
 
 try:
     from redis_cache import (
-        get_cached_answer, save_cached_answer,
-        search_semantic_cache, save_semantic_cache, get_embedding,
+        get_cached_answer, search_semantic_cache, save_answer_cache,
+        get_embedding, CACHE_KEY_PREFIX,
         r as _redis_client, cosine_similarity as _cosine_similarity,
     )
     _REDIS_AVAILABLE = True
@@ -369,7 +369,7 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
             return semantic_cached["answer"], semantic_cached["sources"]
     elif _REDIS_AVAILABLE:
         # 캐시 비활성화 시에도 유사도 점수만 로그로 확인
-        _keys = list(_redis_client.scan_iter("semantic:*"))
+        _keys = list(_redis_client.scan_iter(f"{CACHE_KEY_PREFIX}*"))
         if _keys:
             _q_emb = get_embedding(question)
             logger.debug("[Similarity Log (cache OFF)]")
@@ -378,6 +378,8 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
                 if not _raw:
                     continue
                 _item = json.loads(_raw)
+                if len(_item.get("embedding", [])) != len(_q_emb):
+                    continue  # 다른 provider로 저장된 옛 데이터는 로그에서도 스킵
                 _score = _cosine_similarity([_q_emb], [_item["embedding"]])[0][0]
                 logger.debug("  score=%.4f | cached_query='%s'", _score, _item['query'])
 
@@ -535,14 +537,8 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
     }
 
     if use_cache:
-        save_cached_answer(
+        save_answer_cache(
             normalized_question,
-            {
-                "answer": answer,
-                "sources": sources
-            }
-        )
-        save_semantic_cache(
             question,
             {
                 "answer": answer,
@@ -687,15 +683,14 @@ def generate_stream(question: str, thread_id: str = "user_1", use_cache: bool = 
         "top_sources": all_docs,
     }
 
-    # ---------- 캐시 저장: 반드시 [DONE] yield 전에! ----------
+    # ---------- 캐시 저장 ----------
     if use_cache:
         try:
-            save_cached_answer(normalized_question, {"answer": full_answer, "sources": sources})
-            save_semantic_cache(question, {"answer": full_answer, "sources": sources})
+            save_answer_cache(normalized_question, question, {"answer": full_answer, "sources": sources})
             logger.debug("캐시 저장 완료 — question: %s", question)
         except Exception as e:
             logger.error("캐시 저장 실패: %s", e, exc_info=True)
-    # ----------------------------------------------------------
+    # -------------------------------
 
     yield "data: [DONE]\n\n"
     yield f"data: [SOURCES]{json.dumps(sources, ensure_ascii=False)}\n\n"
