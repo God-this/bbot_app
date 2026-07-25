@@ -20,6 +20,7 @@ class AuthProvider extends ChangeNotifier {
   String?    get error     => _error;
   bool get isLoading        => _status == AuthStatus.unknown;
   bool get isLoggedIn       => _status == AuthStatus.authenticated;
+  bool get isGuest          => _user?.role != 'admin' && (_token != null) && (_user?.email.isEmpty ?? false);
 
   /// 앱 시작 시 저장된 토큰 확인
   Future<void> init() async {
@@ -45,6 +46,22 @@ class AuthProvider extends ChangeNotifier {
         _status = AuthStatus.authenticated;
         notifyListeners();
       }
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  /// 로그인 없이 게스트로 계속하기
+  Future<void> continueAsGuest() async {
+    _error = null;
+    try {
+      final result = await _service.signInAsGuest();
+      _token  = result.token;
+      _user   = result.user;
+      _status = AuthStatus.authenticated;
+      notifyListeners();
     } catch (e) {
       _error = e.toString();
       notifyListeners();
