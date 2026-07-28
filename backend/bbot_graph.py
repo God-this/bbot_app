@@ -31,8 +31,8 @@ _reranker = CrossEncoder("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1") # 다국�
 # ==================== [임시] 궁금해궁금해 → 구매 링크 처리 ====================
 # TODO: 임시 조치. 책 페이지 출처 대신 구매 링크(웹 출처 형태)로 노출.
 # 되돌릴 때는 이 블록과 classify_documents() 내 관련 분기만 제거하면 됨.
-GUNGGEUM_BOOK_NAME = "궁금해궁금해"
-GUNGGEUM_PURCHASE_URL = "https://www.yes24.com/product/goods/85464691"
+# GUNGGEUM_BOOK_NAME = "궁금해궁금해"
+# GUNGGEUM_PURCHASE_URL = "https://www.yes24.com/product/goods/85464691"
 
 
 def classify_documents(docs: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
@@ -47,11 +47,11 @@ def classify_documents(docs: list[dict]) -> tuple[list[dict], list[dict], list[d
         if "start" in doc and "end" in doc:
             doc.setdefault("type", "video")
             video_docs.append(doc)
-        elif "book" in doc and doc.get("book") == GUNGGEUM_BOOK_NAME:
-            doc["type"] = "web"
-            doc["title"] = doc.get("book", GUNGGEUM_BOOK_NAME)
-            doc["url"] = GUNGGEUM_PURCHASE_URL
-            web_docs.append(doc)
+        # elif "book" in doc and doc.get("book") == GUNGGEUM_BOOK_NAME:
+        #     doc["type"] = "web"
+        #     doc["title"] = doc.get("book", GUNGGEUM_BOOK_NAME)
+        #     doc["url"] = GUNGGEUM_PURCHASE_URL
+        #     web_docs.append(doc)
         elif "book" in doc:
             doc.setdefault("type", "book")
             book_docs.append(doc)
