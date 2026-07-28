@@ -350,8 +350,8 @@ def rerank_documents(question: str, docs: list[dict], top_k: int = 5) -> list[di
 def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CACHE):
     logger.info("===== Integrated Search Started ===== question=%s", question)
 
-    if not is_creation_question(question):
-        return "창조과학 질문만 처리합니다.", {}
+    # if not is_creation_question(question):
+    #     return "창조과학 질문만 처리합니다.", {}
 
     normalized_question = normalize_query(question)
 
@@ -554,10 +554,10 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
 def generate_stream(question: str, thread_id: str = "user_1", use_cache: bool = USE_CACHE) -> Generator[str, None, None]:
     """답변을 SSE 형식으로 스트리밍. 토큰→[DONE]→[SOURCES]→[SESSION] 순서로 yield"""
 
-    if not is_creation_question(question):
-        yield "data: 창조과학 질문만 처리합니다.\n\n"
-        yield "data: [DONE]\n\n"
-        return
+    # if not is_creation_question(question):
+    #     yield "data: 창조과학 질문만 처리합니다.\n\n"
+    #     yield "data: [DONE]\n\n"
+    #     return
 
     normalized_question = normalize_query(question)
 
