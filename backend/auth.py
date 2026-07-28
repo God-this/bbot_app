@@ -1,7 +1,7 @@
 # auth.py — 인증 라우터 (Google 소셜 로그인 + 게스트 로그인 + JWT)
 #
 # 엔드포인트:
-#   POST /api/auth/google          — Google idToken 검증 → JWT 발급
+#   POST /api/auth/google          — Google idToken/accessToken 검증 → JWT 발급
 #   POST /api/auth/guest           — device_id 기반 게스트 로그인 → JWT 발급
 #   GET  /api/auth/me              — 내 정보 조회 (JWT 필요)
 #   GET  /api/chat/sessions        — 내 대화 세션 목록 (JWT 필요)
@@ -122,7 +122,8 @@ def upsert_user(
 # ──────────────────────────────────────────────────────────
 
 class GoogleLoginRequest(BaseModel):
-    id_token: str  # Flutter google_sign_in 패키지에서 받은 idToken
+    id_token: Optional[str] = None       # 모바일: google_sign_in 패키지의 idToken
+    access_token: Optional[str] = None   # 웹: 팝업 플로우에서 받은 accessToken
 
 
 class GuestLoginRequest(BaseModel):
@@ -136,19 +137,30 @@ class GuestLoginRequest(BaseModel):
 @router.post("/google")
 async def google_login(req: GoogleLoginRequest):
     """
-    Flutter에서 전달받은 Google idToken을 검증하고 JWT를 발급합니다.
+    Flutter에서 전달받은 Google 토큰을 검증하고 JWT를 발급합니다.
+    모바일(id_token)과 웹(access_token)은 검증 방식이 다릅니다.
 
     Flow:
-      1. Google tokeninfo API로 idToken 유효성 검증
+      1. id_token이 있으면 tokeninfo API로, access_token이 있으면 userinfo API로 검증
       2. users 테이블 upsert
       3. JWT 발급 후 반환
     """
-    # Google 공식 tokeninfo 엔드포인트로 검증
+    if not req.id_token and not req.access_token:
+        raise HTTPException(status_code=400, detail="id_token 또는 access_token이 필요합니다.")
+
     async with httpx.AsyncClient(timeout=10.0) as client:
-        resp = await client.get(
-            "https://oauth2.googleapis.com/tokeninfo",
-            params={"id_token": req.id_token},
-        )
+        if req.id_token:
+            # 모바일: idToken을 Google tokeninfo로 검증
+            resp = await client.get(
+                "https://oauth2.googleapis.com/tokeninfo",
+                params={"id_token": req.id_token},
+            )
+        else:
+            # 웹: accessToken을 Google userinfo로 검증 (유효하지 않으면 401 응답)
+            resp = await client.get(
+                "https://www.googleapis.com/oauth2/v3/userinfo",
+                headers={"Authorization": f"Bearer {req.access_token}"},
+            )
 
     if resp.status_code != 200:
         raise HTTPException(
