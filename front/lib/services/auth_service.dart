@@ -18,9 +18,10 @@ class AuthService {
     clientId: kIsWeb
         ? '470638733275-cud88egkutov2ls7hq2uivlu9ieb2ic5.apps.googleusercontent.com'
         : '470638733275-k58682cvnitqo41deodp0a2fk778e6am.apps.googleusercontent.com',
+    // 수정
     serverClientId: kIsWeb
-        ? '470638733275-cud88egkutov2ls7hq2uivlu9ieb2ic5.apps.googleusercontent.com'
-        : null,
+        ? null
+        : '470638733275-k58682cvnitqo41deodp0a2fk778e6am.apps.googleusercontent.com',
   );
 
   AuthService({required this.baseUrl});
