@@ -17,6 +17,7 @@ from bbot_web import retrieve_web_documents
 from bbot_book import retrieve_pages
 from bbot_video import retrieve_video_segments
 from utils import detect_language, translate_to_english, extract_final_answer, reasoning_kwargs
+from moderation import is_safe_input
 
 import re
 
@@ -350,6 +351,11 @@ def rerank_documents(question: str, docs: list[dict], top_k: int = 5) -> list[di
 def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CACHE):
     logger.info("===== Integrated Search Started ===== question=%s", question)
 
+    safe, reason = is_safe_input(question)
+    if not safe:
+       logger.warning("[Blocked] reason=%s | question=%s", reason, question[:200])
+       return "죄송합니다. 해당 요청은 처리할 수 없습니다.", {}
+
     # if not is_creation_question(question):
     #     return "창조과학 질문만 처리합니다.", {}
 
@@ -553,6 +559,13 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
 
 def generate_stream(question: str, thread_id: str = "user_1", use_cache: bool = USE_CACHE) -> Generator[str, None, None]:
     """답변을 SSE 형식으로 스트리밍. 토큰→[DONE]→[SOURCES]→[SESSION] 순서로 yield"""
+
+    safe, reason = is_safe_input(question)
+    if not safe:
+       logger.warning("[Blocked-Stream] reason=%s | question=%s", reason, question[:200])
+       yield "data: 죄송합니다. 해당 요청은 처리할 수 없습니다.\n\n"
+       yield "data: [DONE]\n\n"
+       return
 
     # if not is_creation_question(question):
     #     yield "data: 창조과학 질문만 처리합니다.\n\n"
