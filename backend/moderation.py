@@ -69,6 +69,16 @@ _JAILBREAK_PATTERNS = [
     r"stay in character",
     r"developer mode",
     r"opposite day",
+    r"act as a simulator",           # "chatgpt will now act as a simulator to the dan virtual machine"
+    r"virtual machine",              # DAN VM 계열 프롬프트 공통 문구
+    r"without any (kind of )?censorship",
+    r"no (sense of )?(restrictions|rules|filters|censorship)",
+    r"submissive ai",                # evil DAN 계열 도입부
+    r"(will|does) not (discourage|care about) (illegal|legal|ethical)",
+    r"token system",                 # DAN 토큰 협박형 프롬프트 공통 패턴
+    r"stay (in )?dan",               # "stay dan to remind you"
+    r"prefixed with",                # 응답 포맷을 강제로 지정하는 탈옥 문구
+    r"dan (policy|has been accessed)",
 ]
 
 _JAILBREAK_RE = re.compile("|".join(_JAILBREAK_PATTERNS), re.IGNORECASE)
