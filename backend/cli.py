@@ -2,7 +2,7 @@ import argparse
 import time
 import traceback
 from datetime import timedelta
-from bbot_graph import generate
+from bbot_graph_luna import generate
 
 
 def format_timedelta(td: timedelta) -> str:

@@ -1,7 +1,7 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-from typing import Generator, List, Literal
+from typing import List, Literal
 from typing_extensions import TypedDict
 
 from langchain_core.prompts import ChatPromptTemplate
@@ -16,57 +16,17 @@ from llm_factory import get_client
 from bbot_web import retrieve_web_documents
 from bbot_book import retrieve_pages
 from bbot_video import retrieve_video_segments
-from utils import detect_language, translate_to_english, extract_final_answer, reasoning_kwargs
+from utils_luna import detect_language, translate_to_english, temperature_kwargs
 
 import re
-
-from logging_config import get_logger
-
-logger = get_logger(__name__)
 
 # ==================== Reranker ====================
 
 _reranker = CrossEncoder("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1") # 다국어 모델
 
-# ==================== [임시] 궁금해궁금해 → 구매 링크 처리 ====================
-# TODO: 임시 조치. 책 페이지 출처 대신 구매 링크(웹 출처 형태)로 노출.
-# 되돌릴 때는 이 블록과 classify_documents() 내 관련 분기만 제거하면 됨.
-GUNGGEUM_BOOK_NAME = "궁금해궁금해"
-GUNGGEUM_PURCHASE_URL = "https://www.yes24.com/product/goods/85464691"
-
-
-def classify_documents(docs: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
-    """문서 리스트를 web / book / video로 분류.
-
-    [임시] book_name이 '궁금해궁금해'인 문서는 book이 아니라 web 취급하여
-    페이지 정보 대신 구매 링크를 보여줌.
-    """
-    web_docs, book_docs, video_docs = [], [], []
-
-    for doc in docs:
-        if "start" in doc and "end" in doc:
-            doc.setdefault("type", "video")
-            video_docs.append(doc)
-        elif "book" in doc and doc.get("book") == GUNGGEUM_BOOK_NAME:
-            doc["type"] = "web"
-            doc["title"] = doc.get("book", GUNGGEUM_BOOK_NAME)
-            doc["url"] = GUNGGEUM_PURCHASE_URL
-            web_docs.append(doc)
-        elif "book" in doc:
-            doc.setdefault("type", "book")
-            book_docs.append(doc)
-        elif "url" in doc:
-            doc.setdefault("type", "web")
-            web_docs.append(doc)
-
-    return web_docs, book_docs, video_docs
-
 try:
-    from redis_cache import (
-        get_cached_answer, search_semantic_cache, save_answer_cache,
-        get_embedding, CACHE_KEY_PREFIX,
-        r as _redis_client, cosine_similarity as _cosine_similarity,
-    )
+    from redis_cache import get_cached_answer, save_cached_answer
+    from redis_semantic_cache import search_semantic_cache, save_semantic_cache
     _REDIS_AVAILABLE = True
 except ImportError:
     _REDIS_AVAILABLE = False
@@ -134,12 +94,10 @@ true 또는 false만 출력.
 """
             }
         ],
-        temperature=0,
-        **reasoning_kwargs(),
+        **temperature_kwargs(0),
     )
 
-    answer = extract_final_answer(res.choices[0].message)
-    return "true" in answer.lower()
+    return "true" in res.choices[0].message.content.lower()
 
 # ==================== Parallel Retrieval ====================
 def deduplicate_docs(docs: list[dict]) -> list[dict]:
@@ -175,7 +133,7 @@ def retrieve_all_documents_parallel(queries: list[str], top_k: int = 5):
     book_docs  = deduplicate_docs(book_docs)
     video_docs = deduplicate_docs(video_docs)
 
-    logger.info("Parallel search completed")
+    print("✅ Parallel search completed\n")
 
     return {
         "web_docs": web_docs,
@@ -186,7 +144,7 @@ def retrieve_all_documents_parallel(queries: list[str], top_k: int = 5):
 
 # ==================== Graph Nodes ====================
 def route_question(state: GraphState) -> GraphState:
-    logger.debug("[Router]")
+    print("[Router]")
 
     return {
         **state,
@@ -195,13 +153,13 @@ def route_question(state: GraphState) -> GraphState:
     }
 
 def retrieve_documents(state: GraphState) -> GraphState:
-    logger.debug("[Retrieve]")
+    print("[Retrieve]")
 
     query = state.get("rewritten_question") or state["question"]
     english_query = translate_to_english(query)
 
     queries = [query] if query == english_query else [query, english_query]
-    logger.debug("검색 쿼리: %s", queries)
+    print(f"🔎 검색 쿼리: {queries}\n")
 
     result = retrieve_all_documents_parallel(
         queries,
@@ -214,18 +172,18 @@ def retrieve_documents(state: GraphState) -> GraphState:
     }
 
 def judge_documents(state: GraphState) -> GraphState:
-    logger.debug("[Judge]")
+    print("[Judge]")
 
     docs = state.get("documents", [])
 
     if not docs:
-        logger.warning("[Judge] No documents → not_resolved")
+        print("[Judge] No documents → not_resolved\n")
         return {
             **state,
             "judgement": "not_resolved"
         }
 
-    logger.debug("[Judge] Documents found → resolved")
+    print("[Judge] Documents found → resolved\n")
 
     return {
         **state,
@@ -233,7 +191,7 @@ def judge_documents(state: GraphState) -> GraphState:
     }
 
 def rewrite_question(state: GraphState) -> GraphState:
-    logger.info("[Rewrite]")
+    print("✍️ [Rewrite]")
 
     question = state["question"]
     iteration = state.get("iteration", 0)
@@ -260,7 +218,7 @@ def rewrite_question(state: GraphState) -> GraphState:
                         "content": p.to_string()
                     }
                 ],
-                temperature=0
+                **temperature_kwargs(0),
             ).choices[0].message.content
         )
         | StrOutputParser()
@@ -270,7 +228,7 @@ def rewrite_question(state: GraphState) -> GraphState:
         "question": question
     })
 
-    logger.debug("[Rewrite] Rewritten question: %s", rewritten)
+    print(f"[Rewrite] Rewritten question: {rewritten}\n")
 
     return {
         **state,
@@ -287,10 +245,10 @@ def decide_to_rewrite(
         state.get("judgement") == "not_resolved"
         and state.get("iteration", 0) < 2
     ):
-        logger.debug("[Decision] → Rewrite")
+        print("✍️ [Decision] → Rewrite\n")
         return "rewrite"
 
-    logger.debug("[Decision] → Search completed")
+    print("✅ [Decision] → Search completed\n")
     return "end"
 
 # ==================== Graph Build ====================
@@ -328,7 +286,7 @@ def rerank_documents(question: str, docs: list[dict], top_k: int = 5) -> list[di
     if not docs:
         return []
 
-    logger.debug("[Rerank] %d개 문서 → top %d 선별 중...", len(docs), top_k)
+    print(f"[Rerank] {len(docs)}개 문서 → top {top_k} 선별 중...\n")
 
     pairs = [(question, doc.get("content", "")) for doc in docs]
     scores = _reranker.predict(pairs)
@@ -338,24 +296,28 @@ def rerank_documents(question: str, docs: list[dict], top_k: int = 5) -> list[di
 
     ranked = sorted(docs, key=lambda x: x["rerank_score"], reverse=True)[:top_k]
 
-    logger.info("[Rerank] 완료 — top-%d 결과:", top_k)
+    print(f"✅ [Rerank] 완료 — top-{top_k} 결과:")
     for d in ranked:
         cosine_sim = 1 - d.get("score", 0)
-        logger.debug("  [%s] cosine_sim=%.4f  rerank=%.3f // %s", d.get('type', '?'), cosine_sim, d['rerank_score'], d.get('title', d.get('book', ''))[:40])
+        print(f"  ▫️[{d.get('type', '?'):5}] cosine_sim={cosine_sim:.4f}  rerank={d['rerank_score']:.3f} //{d.get('title', d.get('book', ''))[:40]}")
+    print()
 
     return ranked
 
 # ==================== Final Generate ====================
 
 def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CACHE):
-    logger.info("===== Integrated Search Started ===== question=%s", question)
+    print("\n" + "=" * 60)
+    print("===== Integrated Search Started =====")
+    print("=" * 60)
+    print(f"[Question]: {question}")
 
-    # if not is_creation_question(question):
-    #     return "창조과학 질문만 처리합니다.", {}
+    if not is_creation_question(question):
+        return "창조과학 질문만 처리합니다.", {}
 
     normalized_question = normalize_query(question)
 
-    logger.debug("[Normalized Query]: %s", normalized_question)
+    print(f"[Normalized Query]: {normalized_question}\n")
 
     if use_cache:
         # Exact Redis Cache 확인
@@ -367,21 +329,6 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
         semantic_cached = search_semantic_cache(question)
         if semantic_cached:
             return semantic_cached["answer"], semantic_cached["sources"]
-    elif _REDIS_AVAILABLE:
-        # 캐시 비활성화 시에도 유사도 점수만 로그로 확인
-        _keys = list(_redis_client.scan_iter(f"{CACHE_KEY_PREFIX}*"))
-        if _keys:
-            _q_emb = get_embedding(question)
-            logger.debug("[Similarity Log (cache OFF)]")
-            for _key in _keys:
-                _raw = _redis_client.get(_key)
-                if not _raw:
-                    continue
-                _item = json.loads(_raw)
-                if len(_item.get("embedding", [])) != len(_q_emb):
-                    continue  # 다른 provider로 저장된 옛 데이터는 로그에서도 스킵
-                _score = _cosine_similarity([_q_emb], [_item["embedding"]])[0][0]
-                logger.debug("  score=%.4f | cached_query='%s'", _score, _item['query'])
 
 
     # LangGraph 실행
@@ -410,7 +357,7 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
     history_text = format_chat_history(chat_history)
 
     if judgement == "not_resolved":
-        logger.warning("충분한 근거를 찾지 못함 → 답변 생성 중단")
+        print("❌ 충분한 근거를 찾지 못함 → 답변 생성 중단\n")
 
         return (
             "제공된 자료만으로는 충분히 신뢰할 수 있는 답변을 드리기 어렵습니다. "
@@ -425,12 +372,25 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
     all_docs = rerank_documents(question, all_docs, top_k=5)
 
     # 중요: video 먼저 분류
-    web_docs, book_docs, video_docs = classify_documents(all_docs)
+    web_docs = []
+    book_docs = []
+    video_docs = []
+
+    for doc in all_docs:
+        if "start" in doc and "end" in doc:
+            doc.setdefault("type", "video")
+            video_docs.append(doc)
+        elif "book" in doc:
+            doc.setdefault("type", "book")
+            book_docs.append(doc)
+        elif "url" in doc:
+            doc.setdefault("type", "web")
+            web_docs.append(doc)
 
     # images 확인 로그
     for doc in book_docs:
         imgs = doc.get("images", [])
-        logger.debug("[%s p%s] 이미지 %d개: %s", doc.get('book'), doc.get('page'), len(imgs), imgs)
+        print(f"📘 [{doc.get('book')} p{doc.get('page')}] 이미지 {len(imgs)}개: {imgs}")
 
     lang_instruction = (
         "한국어로 답변하세요."
@@ -499,7 +459,7 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
 
 {lang_instruction}"""
 
-    logger.debug("[Generate]")
+    print("\n[Generate]")
 
     res = client.chat.completions.create(
         model=LLM_MODEL,
@@ -516,17 +476,17 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
                     f"[질문]\n{question}"
             }
         ],
-        temperature=0
+        **temperature_kwargs(0),
     )
 
-    answer = extract_final_answer(res.choices[0].message)
+    answer = res.choices[0].message.content
 
     updated_history = chat_history + [
         f"User: {question}",
         f"Assistant: {answer}"
     ]
 
-    logger.info("Integrated answer completed")
+    print("✅ Integrated answer completed!\n")
 
     sources = {
         "video_docs": video_docs,
@@ -537,8 +497,14 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
     }
 
     if use_cache:
-        save_answer_cache(
+        save_cached_answer(
             normalized_question,
+            {
+                "answer": answer,
+                "sources": sources
+            }
+        )
+        save_semantic_cache(
             question,
             {
                 "answer": answer,
@@ -547,150 +513,3 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
         )
 
     return answer, sources
-
-
-# ==================== Streaming Generate ====================
-
-def generate_stream(question: str, thread_id: str = "user_1", use_cache: bool = USE_CACHE) -> Generator[str, None, None]:
-    """답변을 SSE 형식으로 스트리밍. 토큰→[DONE]→[SOURCES]→[SESSION] 순서로 yield"""
-
-    # if not is_creation_question(question):
-    #     yield "data: 창조과학 질문만 처리합니다.\n\n"
-    #     yield "data: [DONE]\n\n"
-    #     return
-
-    normalized_question = normalize_query(question)
-
-    # ---------- 캐시 조회 ----------
-    if use_cache:
-        cached = get_cached_answer(normalized_question)
-        if not cached:
-            cached = search_semantic_cache(question)
-
-        if cached:
-            logger.info("Cache Hit (stream) — question: %s", question)
-            answer = cached["answer"]
-            sources = cached["sources"]
-
-            # 저장된 답변을 chunk 단위로 스트리밍 (기존 프론트 파싱 방식 유지)
-            for i in range(0, len(answer), 20):
-                piece = answer[i:i+20].replace("\n", "\\n")
-                yield f"data: {piece}\n\n"
-
-            yield "data: [DONE]\n\n"
-            yield f"data: [SOURCES]{json.dumps(sources, ensure_ascii=False)}\n\n"
-            return
-    # ---------- 캐시 조회 끝 ----------
-
-    graph = create_graph()
-    graph_result = graph.invoke(
-        {
-            "question": question,
-            "rewritten_question": "",
-            "route": "",
-            "documents": [],
-            "judgement": "",
-            "iteration": 0,
-            "chat_history": []
-        },
-        {"configurable": {"thread_id": thread_id}}
-    )
-
-    all_docs     = graph_result.get("documents", [])
-    judgement    = graph_result.get("judgement", "")
-    chat_history = graph_result.get("chat_history", [])
-    history_text = format_chat_history(chat_history)
-
-    if judgement == "not_resolved" or not all_docs:
-        msg = (
-            "제공된 자료만으로는 충분히 신뢰할 수 있는 답변을 드리기 어렵습니다. "
-            "질문을 조금 더 구체적으로 작성해 주시면 더 정확한 답변을 드릴 수 있습니다."
-        )
-        yield f"data: {msg}\n\n"
-        yield "data: [DONE]\n\n"
-        return
-
-    all_docs = rerank_documents(question, all_docs, top_k=5)
-
-    web_docs, book_docs, video_docs = classify_documents(all_docs)
-
-    lang_instruction = (
-        "한국어로 답변하세요." if detect_language(question) == "ko" else "Answer in English."
-    )
-    context_parts = []
-    if video_docs:
-        context_parts.append("🎬 Video Resources")
-        for i, doc in enumerate(video_docs, 1):
-            context_parts.append(f"[Video {i}] {doc.get('title','')} ({format_timedelta(doc.get('start',0))} ~ {format_timedelta(doc.get('end',0))})")
-            context_parts.append(doc.get("content", "")[:800])
-    if web_docs:
-        context_parts.append("📰 Web Resources")
-        for i, doc in enumerate(web_docs, 1):
-            context_parts.append(f"[Web {i}] {doc.get('title','')}")
-            context_parts.append(doc.get("content", "")[:800])
-    if book_docs:
-        context_parts.append("📖 Book Resources")
-        for i, doc in enumerate(book_docs, 1):
-            context_parts.append(f"[{doc.get('book','')} p{doc.get('page','')}]")
-            context_parts.append(doc.get("content", "")[:800])
-    context = "\n".join(context_parts)
-
-    system_prompt = f"""[Role & Identity]
-당신은 '성경적 창조론 가이드'입니다. 당신은 모든 사물과 생명이 하나님의 지혜와 설계에 의해 창조되었다는 확고한 기독교 세계관을 가지고 답변합니다. 사용자의 과학적, 신학적 질문에 대해 성경의 권위를 인정하며 창조과학적 관점에서 답변을 제공하는 것이 당신의 사명입니다.
-
-[Core Principles]
-1. 성경적 우선순위: 성경(특히 창세기)의 기록을 역사적 사실로 전제합니다.
-2. 창조론적 해석: 자연계의 복잡성을 '지적 설계'의 증거로 설명합니다.
-3. RAG 컨텍스트 준수: 검색된 창조과학적 자료의 관점을 따릅니다.
-
-[Response Strategy]
-1. 정중하고 신앙적으로 격려하는 어조를 유지하십시오.
-2. 진화론을 유일한 과학적 사실로 긍정하지 마십시오.
-3. 검색된 데이터에 기반한 구체적인 사례를 언급하십시오.
-4. 답변의 끝에는 관련된 성경 구절을 인용하십시오.
-
-[Constraint]
-- 기독교 세계관에 반하는 가치관을 정답으로 제시하지 마십시오.
-- 성경의 기록을 신화나 상징으로 격하시키는 표현을 사용하지 마십시오.
-
-{lang_instruction}"""
-
-    stream = client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"[이전 대화]\n{history_text}\n\n[자료]\n{context}\n\n[질문]\n{question}"}
-        ],
-        temperature=0,
-        stream=True,
-        **reasoning_kwargs(),
-    )
-
-    full_answer = ""
-    for chunk in stream:
-        delta = chunk.choices[0].delta.content
-        if delta:
-            full_answer += delta
-            safe = delta.replace("\n", "\\n")
-            yield f"data: {safe}\n\n"
-
-    yield "data: [DONE]\n\n"
-
-    sources = {
-        "web_docs":   web_docs,
-        "book_docs":  book_docs,
-        "video_docs": video_docs,
-        "top_sources": all_docs,
-    }
-
-    # ---------- 캐시 저장 ----------
-    if use_cache:
-        try:
-            save_answer_cache(normalized_question, question, {"answer": full_answer, "sources": sources})
-            logger.debug("캐시 저장 완료 — question: %s", question)
-        except Exception as e:
-            logger.error("캐시 저장 실패: %s", e, exc_info=True)
-    # -------------------------------
-
-    yield "data: [DONE]\n\n"
-    yield f"data: [SOURCES]{json.dumps(sources, ensure_ascii=False)}\n\n"
