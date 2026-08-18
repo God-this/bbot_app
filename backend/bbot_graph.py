@@ -808,8 +808,6 @@ def generate_stream(
                 safe = delta.replace("\n", "\\n")
                 yield f"data: {safe}\n\n"
 
-        yield "data: [DONE]\n\n"
-
         sources = {
             "web_docs":   web_docs,
             "book_docs":  book_docs,
@@ -835,6 +833,4 @@ def generate_stream(
             },
         )
 
-        # 기존 중복 [DONE] 이슈는 의도적으로 보류된 상태라 그대로 유지
-        yield "data: [DONE]\n\n"
         yield f"data: [SOURCES]{json.dumps(sources, ensure_ascii=False)}\n\n"
