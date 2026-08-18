@@ -6,3 +6,6 @@ __pycache__/
 # 가상환경
 venv/
 .venv/
+
+eval_data.xlsx
+~$*.xlsx

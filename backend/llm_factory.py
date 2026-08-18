@@ -83,14 +83,19 @@ def get_model_info() -> dict:
 
 
 def get_client():
-    """openai.OpenAI 클라이언트 — chat.completions.create 직접 호출용"""
-    from openai import OpenAI
+    """openai.OpenAI 클라이언트 — chat.completions.create 직접 호출용
+
+    Langfuse drop-in wrapper 사용: import만 바꿔서 모든
+    chat.completions.create() 호출이 자동으로 Langfuse에 트레이싱됨
+    (Upstage/Ollama처럼 base_url이 달라도 동일하게 동작)
+    """
+    from langfuse.openai import OpenAI
+
     if PROVIDER == "upstage":
         return OpenAI(api_key=UPSTAGE_API_KEY, base_url=UPSTAGE_BASE_URL)
     elif PROVIDER == "openai":
         return OpenAI(api_key=OPENAI_API_KEY)
     elif PROVIDER == "ollama":
-        # Ollama는 OpenAI 호환 엔드포인트 제공
         return OpenAI(api_key="ollama", base_url=f"{OLLAMA_BASE_URL}/v1")
     else:
         raise ValueError(f"지원하지 않는 PROVIDER: {PROVIDER}")

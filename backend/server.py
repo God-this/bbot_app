@@ -152,7 +152,13 @@ async def chat(
     try:
         from bbot_graph import generate
 
-        answer, sources_raw = await asyncio.to_thread(generate, req.question.strip())
+        answer, sources_raw = await asyncio.to_thread(
+            generate,
+            req.question.strip(),
+            thread_id=str(user["user_id"]),
+            user_id=str(user["user_id"]),
+            source="api",
+        )
 
         raw = sources_raw if isinstance(sources_raw, dict) else {}
         sources = {
@@ -267,7 +273,10 @@ async def refresh_video_status(user: dict = Depends(require_admin)):
     await _refresh_video_status()
     return await get_video_status(user)
 
-
+@app.on_event("shutdown")
+async def shutdown():
+    from langfuse import get_client
+    get_client().flush()
 # ──────────────────────────────────────────────────────────
 # 직접 실행 시
 # ──────────────────────────────────────────────────────────

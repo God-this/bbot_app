@@ -3,6 +3,7 @@ import time
 import traceback
 from datetime import timedelta
 from bbot_graph import generate
+from langfuse import get_client
 
 
 def format_timedelta(td: timedelta) -> str:
@@ -63,6 +64,9 @@ def handle_question(question):
     except Exception as e:
         print(f"\n❌ 오류 발생: {e}\n")
         traceback.print_exc()
+        
+    finally:
+        get_client().flush()
 
 
 def ask_user():

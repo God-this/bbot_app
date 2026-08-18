@@ -1,5 +1,7 @@
 # 질문을 한국어 -> 영어 번역
 import re
+from langfuse import observe
+
 from config import LLM_MODEL
 from llm_factory import get_client
 
@@ -8,6 +10,7 @@ def detect_language(text: str) -> str:
     return "ko" if any("가" <= c <= "힣" for c in text) else "en"
 
 
+@observe(name="translate-to-english")
 def translate_to_english(question: str) -> str:
     if detect_language(question) == "en":
         return question
@@ -29,6 +32,7 @@ def translate_to_english(question: str) -> str:
         ],
         temperature=0,
         max_completion_tokens=200,
+        name="translate-question",
     )
     translated = res.choices[0].message.content.strip()
     return translated
