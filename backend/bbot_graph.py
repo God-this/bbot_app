@@ -23,6 +23,7 @@ from bbot_web import retrieve_web_documents
 from bbot_book import retrieve_pages
 from bbot_video import retrieve_video_segments
 from utils import detect_language, translate_to_english, extract_final_answer, reasoning_kwargs
+from moderation import is_safe_input
 
 import re
 
@@ -37,8 +38,8 @@ _reranker = CrossEncoder("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1") # 다국�
 # ==================== [임시] 궁금해궁금해 → 구매 링크 처리 ====================
 # TODO: 임시 조치. 책 페이지 출처 대신 구매 링크(웹 출처 형태)로 노출.
 # 되돌릴 때는 이 블록과 classify_documents() 내 관련 분기만 제거하면 됨.
-GUNGGEUM_BOOK_NAME = "궁금해궁금해"
-GUNGGEUM_PURCHASE_URL = "https://www.yes24.com/product/goods/85464691"
+# GUNGGEUM_BOOK_NAME = "궁금해궁금해"
+# GUNGGEUM_PURCHASE_URL = "https://www.yes24.com/product/goods/85464691"
 
 
 def classify_documents(docs: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
@@ -53,11 +54,11 @@ def classify_documents(docs: list[dict]) -> tuple[list[dict], list[dict], list[d
         if "start" in doc and "end" in doc:
             doc.setdefault("type", "video")
             video_docs.append(doc)
-        elif "book" in doc and doc.get("book") == GUNGGEUM_BOOK_NAME:
-            doc["type"] = "web"
-            doc["title"] = doc.get("book", GUNGGEUM_BOOK_NAME)
-            doc["url"] = GUNGGEUM_PURCHASE_URL
-            web_docs.append(doc)
+        # elif "book" in doc and doc.get("book") == GUNGGEUM_BOOK_NAME:
+        #     doc["type"] = "web"
+        #     doc["title"] = doc.get("book", GUNGGEUM_BOOK_NAME)
+        #     doc["url"] = GUNGGEUM_PURCHASE_URL
+        #     web_docs.append(doc)
         elif "book" in doc:
             doc.setdefault("type", "book")
             book_docs.append(doc)
@@ -423,8 +424,13 @@ def generate(
 
         logger.info("===== Integrated Search Started ===== question=%s", question)
 
-        # if not is_creation_question(question):
-        #     return "창조과학 질문만 처리합니다.", {}
+    safe, reason = is_safe_input(question)
+    if not safe:
+       logger.warning("[Blocked] reason=%s | question=%s", reason, question[:200])
+       return "죄송합니다. 해당 요청은 처리할 수 없습니다.", {}
+
+    # if not is_creation_question(question):
+    #     return "창조과학 질문만 처리합니다.", {}
 
         normalized_question = normalize_query(question)
 
@@ -661,19 +667,17 @@ def generate_stream(
 ) -> Generator[str, None, None]:
     """답변을 SSE 형식으로 스트리밍. 토큰→[DONE]→[SOURCES]→[SESSION] 순서로 yield"""
 
-    langfuse = get_langfuse_client()
+    safe, reason = is_safe_input(question)
+    if not safe:
+       logger.warning("[Blocked-Stream] reason=%s | question=%s", reason, question[:200])
+       yield "data: 죄송합니다. 해당 요청은 처리할 수 없습니다.\n\n"
+       yield "data: [DONE]\n\n"
+       return
 
-    with propagate_attributes(
-        session_id=thread_id,
-        user_id=user_id,
-        tags=[source],
-    ):
-        langfuse.update_current_span(input={"question": question})
-
-        # if not is_creation_question(question):
-        #     yield "data: 창조과학 질문만 처리합니다.\n\n"
-        #     yield "data: [DONE]\n\n"
-        #     return
+    # if not is_creation_question(question):
+    #     yield "data: 창조과학 질문만 처리합니다.\n\n"
+    #     yield "data: [DONE]\n\n"
+    #     return
 
         normalized_question = normalize_query(question)
 
@@ -824,15 +828,5 @@ def generate_stream(
                 logger.error("캐시 저장 실패: %s", e, exc_info=True)
         # -------------------------------
 
-        langfuse.update_current_span(
-            output=full_answer,
-            metadata={
-                "web_docs": len(web_docs),
-                "book_docs": len(book_docs),
-                "video_docs": len(video_docs),
-            },
-        )
-
-        # 기존 중복 [DONE] 이슈는 의도적으로 보류된 상태라 그대로 유지
-        yield "data: [DONE]\n\n"
-        yield f"data: [SOURCES]{json.dumps(sources, ensure_ascii=False)}\n\n"
+    yield "data: [DONE]\n\n"
+    yield f"data: [SOURCES]{json.dumps(sources, ensure_ascii=False)}\n\n"

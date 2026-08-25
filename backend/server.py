@@ -31,6 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from auth import router as auth_router, chat_router, get_current_user, require_admin, save_chat_message
+from rate_limiter import check_rate_limit
 
 app = FastAPI(title="BeBot API", version="2.0.0")
 
@@ -146,6 +147,8 @@ async def chat(
     req:  ChatRequest,
     user: dict = Depends(get_current_user),
 ):
+    check_rate_limit(user["user_id"])
+
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="질문이 비어있습니다.")
 
@@ -203,6 +206,8 @@ async def chat_stream(
     req:  ChatRequest,
     user: dict = Depends(get_current_user),
 ):
+    check_rate_limit(user["user_id"])
+    
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="질문이 비어있습니다.")
 

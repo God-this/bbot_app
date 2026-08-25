@@ -75,7 +75,7 @@ def get_cached_answer(normalized_question: str):
 
 # ==================== 조회 2단계: Semantic ====================
 
-def search_semantic_cache(query: str, threshold: float = 0.99):
+def search_semantic_cache(query: str, threshold: float = 0.96):
     """
     저장된 모든 캐시 항목을 순회하며 임베딩 유사도로 매칭.
     exact match에서 못 찾았을 때만 호출되는 fallback 경로.
