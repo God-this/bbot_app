@@ -665,6 +665,7 @@ def generate_stream(
     user_id: str | None = None,
     source: str = "cli",
 ) -> Generator[str, None, None]:
+    langfuse = get_langfuse_client()
     """답변을 SSE 형식으로 스트리밍. 토큰→[DONE]→[SOURCES]→[SESSION] 순서로 yield"""
 
     safe, reason = is_safe_input(question)
