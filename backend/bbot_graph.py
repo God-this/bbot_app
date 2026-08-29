@@ -1,5 +1,6 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
+import contextvars
 from datetime import timedelta
 from typing import Generator, List, Literal
 from typing_extensions import TypedDict
@@ -11,12 +12,18 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from sentence_transformers import CrossEncoder
 
+# config를 먼저 import해서 .env가 로드된 다음에 langfuse를 초기화한다
 from config import LLM_MODEL
+
+from langfuse import observe, propagate_attributes, get_client as get_langfuse_client
+from langfuse.langchain import CallbackHandler
+
 from llm_factory import get_client
 from bbot_web import retrieve_web_documents
 from bbot_book import retrieve_pages
 from bbot_video import retrieve_video_segments
 from utils import detect_language, translate_to_english, extract_final_answer, reasoning_kwargs
+from moderation import is_safe_input
 
 import re
 
@@ -31,8 +38,8 @@ _reranker = CrossEncoder("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1") # 다국�
 # ==================== [임시] 궁금해궁금해 → 구매 링크 처리 ====================
 # TODO: 임시 조치. 책 페이지 출처 대신 구매 링크(웹 출처 형태)로 노출.
 # 되돌릴 때는 이 블록과 classify_documents() 내 관련 분기만 제거하면 됨.
-GUNGGEUM_BOOK_NAME = "궁금해궁금해"
-GUNGGEUM_PURCHASE_URL = "https://www.yes24.com/product/goods/85464691"
+# GUNGGEUM_BOOK_NAME = "궁금해궁금해"
+# GUNGGEUM_PURCHASE_URL = "https://www.yes24.com/product/goods/85464691"
 
 
 def classify_documents(docs: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
@@ -47,11 +54,11 @@ def classify_documents(docs: list[dict]) -> tuple[list[dict], list[dict], list[d
         if "start" in doc and "end" in doc:
             doc.setdefault("type", "video")
             video_docs.append(doc)
-        elif "book" in doc and doc.get("book") == GUNGGEUM_BOOK_NAME:
-            doc["type"] = "web"
-            doc["title"] = doc.get("book", GUNGGEUM_BOOK_NAME)
-            doc["url"] = GUNGGEUM_PURCHASE_URL
-            web_docs.append(doc)
+        # elif "book" in doc and doc.get("book") == GUNGGEUM_BOOK_NAME:
+        #     doc["type"] = "web"
+        #     doc["title"] = doc.get("book", GUNGGEUM_BOOK_NAME)
+        #     doc["url"] = GUNGGEUM_PURCHASE_URL
+        #     web_docs.append(doc)
         elif "book" in doc:
             doc.setdefault("type", "book")
             book_docs.append(doc)
@@ -74,9 +81,14 @@ except ImportError:
 
 client = get_client()
 
+# LangGraph/LangChain 실행을 자동으로 Langfuse에 트레이싱하는 콜백 핸들러.
+# graph.invoke()의 config에 넣어주면 route/retrieve/judge/rewrite 노드가
+# 자동으로 중첩된 span으로 기록됨
+_langfuse_langchain_handler = CallbackHandler()
+
 # ==================== Cache Toggle ====================
 
-USE_CACHE = False  # redis 모듈 없으면 자동 비활성화
+USE_CACHE = True  # redis 모듈 없으면 자동 비활성화
 
 # ==================== State ====================
 class GraphState(TypedDict):
@@ -87,6 +99,12 @@ class GraphState(TypedDict):
     judgement: str
     iteration: int
     chat_history: List[str]
+    # ---- rerank/generate 노드화로 추가된 필드 ----
+    qualified_documents: List[dict]   # judge_stage1 통과 문서 (rerank 입력)
+    reranked_documents: List[dict]    # rerank 출력 top-k (judge_stage2, generate 입력)
+    sources: dict                      # rerank 노드에서 확정되는 web/book/video 분류 결과
+    final_messages: List[dict]         # generate 노드에서 조립된 system/user 메시지
+    fallback_message: str              # judge 실패 시 즉시 반환할 안내 메시지
 
 
 # ==================== Utility ====================
@@ -109,37 +127,70 @@ def normalize_query(query: str) -> str:
     return query
 
 # ==================== Question Filter ====================
+# 판정 원칙: 기본값은 "통과(true)". 서비스 범위와 "명백히 무관한" 질문만 false로 차단한다.
+# (이전 버전은 좁은 키워드 목록에 안 걸리면 false로 판정해 정상 질문을 자주 차단하는
+#  문제가 있었음 — 판정 기준 자체를 "관련 있으면 true"에서 "명백히 무관하면 false"로 반전)
+CREATION_TOPIC_CLASSIFIER_PROMPT = """당신은 '성경적 창조론 챗봇'의 질문 필터입니다.
+이 챗봇의 서비스 범위는 다음과 같습니다.
+ 
+[서비스 범위 — 아래 중 하나라도 해당하면 관련 있음]
+1. 창조론 vs 진화론 (창조설계, 지적설계, 자연선택, 공통조상, 자연주의 등)
+2. 성경의 역사성 (창세기, 노아의 홍수, 방주, 족장 연대, 바벨탑, 출애굽 등)
+3. 지구/우주의 기원과 나이 (지질연대, 방사성동위원소 연대측정, 빅뱅, 우주론, 천문학)
+4. 생명의 기원과 다양성 (화석 기록, 캄브리아기 폭발, 종 분화, 유전학적 다양성, DNA 정보성, 자연선택/돌연변이의 한계)
+5. 인류의 기원 (고인류학, 아담과 하와, 인종 기원, 네안데르탈인 등)
+6. 신앙과 과학의 관계 일반 (신학적 관점에서의 과학 이슈, 기독교 세계관, 성경무오성)
+7. 위 주제들과 자연스럽게 연결되는 후속·파생 질문
+   (예: "그럼 공룡은 왜 멸종했나요?", "핀치새 부리는 왜 그런가요?", "빙하기는 성경적으로 어떻게 설명하나요?" 등
+    — 대화 맥락상 창조과학 주제의 하위 질문이거나, 창조과학 담론에서 흔히 다뤄지는 소재)
+ 
+[판정 원칙 — 반드시 지킬 것]
+- 기본값은 "관련 있음(true)"이다. 질문이 위 범위와 조금이라도 연결될 가능성이 있으면 true로 판단한다.
+- false는 아래처럼 서비스 범위와 "명백히, 확실하게" 무관한 질문에만 사용한다:
+  · 순수 일상/시사 (오늘 날씨, 스포츠 경기 결과, 연예 뉴스, 정치 이슈 등)
+  · 순수 기술/생활 정보 (프로그래밍 코드 작성, 요리 레시피, 여행 일정, 쇼핑 추천 등)
+  · 창조과학 맥락이 전혀 없는 순수 수학/물리 계산 문제
+  · 챗봇 사용법이나 시스템 오류 문의 등 서비스 운영 관련 질문
+  · 위 서비스 범위 어떤 항목과도 개념적 연결고리를 찾을 수 없는 질문
+- 질문이 한 단어나 짧은 문장이라도, 화석·연대·기원·진화·창조·성경·인류·생명·우주 등
+  서비스 범위와 관련된 개념이 포함되어 있으면 true로 판단한다.
+- 판단이 애매하거나 확신이 서지 않으면 항상 true를 선택한다.
+  (이 필터의 목적은 명백한 잡담/스팸만 걸러내는 것이지, 창조과학 관련 질문을
+   조금이라도 걸러내는 것이 아니다.)
+ 
+[질문]
+{question}
+ 
+위 판정 원칙에 따라 true 또는 false만 출력하라. 다른 설명은 절대 추가하지 마라."""
+
+
 def is_creation_question(question: str) -> bool:
+    # LangGraph 밖에서 호출되는 단발성 게이트라 별도 span으로 감싸지 않고,
+    # chat.completions.create()에 name만 지정해 자동 생성되는 generation을 그대로 사용
     res = client.chat.completions.create(
         model=LLM_MODEL,
         messages=[
             {
                 "role": "user",
-                "content": f"""
-다음 질문이 아래 중 하나라도 관련되면 true:
-
-- 성경
-- 창조
-- 진화
-- 생물 기원
-- 노아의 홍수
-(창조설계, 대홍수, 화석, 진화론, 기독교, 창조신앙, 천문학, 연대문제 등과 관련된 질문도 포함)
-
-조금이라도 관련 있으면 true로 판단해.
-
-질문:
-{question}
-
-true 또는 false만 출력.
-"""
+                "content": CREATION_TOPIC_CLASSIFIER_PROMPT.format(question=question)
             }
         ],
         temperature=0,
+        name="classify-creation-question",
         **reasoning_kwargs(),
     )
 
     answer = extract_final_answer(res.choices[0].message)
-    return "true" in answer.lower()
+    # 기본값을 true 쪽에 둔다: 모델이 형식을 어기거나 애매하게 답해도
+    # "false"라는 명시적 문자열이 없는 한 통과시킨다.
+    is_related = "false" not in answer.lower()
+ 
+    logger.debug(
+        "[Topic Filter] question=%s | raw_answer=%s | is_related=%s",
+        question[:80], answer.strip(), is_related,
+    )
+ 
+    return is_related
 
 # ==================== Parallel Retrieval ====================
 def deduplicate_docs(docs: list[dict]) -> list[dict]:
@@ -152,14 +203,18 @@ def deduplicate_docs(docs: list[dict]) -> list[dict]:
             result.append(doc)
     return result
 
+@observe(name="retrieve-context-parallel", as_type="retriever", capture_input=False, capture_output=False)
 def retrieve_all_documents_parallel(queries: list[str], top_k: int = 5):
 
+    # 작업마다 독립된 컨텍스트 복사본을 만들어야 함 —
+    # Context 객체 하나를 여러 스레드가 동시에 run()하면
+    # "already entered" RuntimeError가 남
     futures = []
     with ThreadPoolExecutor(max_workers=9) as executor:
         for q in queries:
-            futures.append(("web",   executor.submit(retrieve_web_documents, q, top_k)))
-            futures.append(("book",  executor.submit(retrieve_pages, q, top_k)))
-            futures.append(("video", executor.submit(retrieve_video_segments, q, top_k)))
+            futures.append(("web",   executor.submit(contextvars.copy_context().run, retrieve_web_documents, q, top_k)))
+            futures.append(("book",  executor.submit(contextvars.copy_context().run, retrieve_pages, q, top_k)))
+            futures.append(("video", executor.submit(contextvars.copy_context().run, retrieve_video_segments, q, top_k)))
 
         web_docs, book_docs, video_docs = [], [], []
         for kind, future in futures:
@@ -176,6 +231,15 @@ def retrieve_all_documents_parallel(queries: list[str], top_k: int = 5):
     video_docs = deduplicate_docs(video_docs)
 
     logger.info("Parallel search completed")
+
+    get_langfuse_client().update_current_span(
+        input={"queries": queries, "top_k": top_k},
+        output={
+            "web_docs": len(web_docs),
+            "book_docs": len(book_docs),
+            "video_docs": len(video_docs),
+        },
+    )
 
     return {
         "web_docs": web_docs,
@@ -208,29 +272,111 @@ def retrieve_documents(state: GraphState) -> GraphState:
         top_k=5
     )
 
+    get_langfuse_client().update_current_span(
+        input={"query": query},
+        output={
+            "web_docs": len(result["web_docs"]),
+            "book_docs": len(result["book_docs"]),
+            "video_docs": len(result["video_docs"]),
+        },
+    )
+
     return {
         **state,
         "documents": result["all_docs"]
     }
 
-def judge_documents(state: GraphState) -> GraphState:
-    logger.debug("[Judge]")
+# judge_stage1: rerank에 넘길 후보를 고르는 "예비 필터" threshold.
+# 최종 판정이 아니므로 느슨하게 잡는다. 실측 전 placeholder — 방향은 아래 참고.
+#   - score는 코사인 거리(작을수록 유사)이므로 (1 - score)가 유사도.
+#   - 세 타입 모두 일단 동일값(0.3)으로 시작해 "거의 걸러내지 않는" 안전한 기본값을 둔다.
+#     즉 judge_stage1은 사실상 "완전히 무관한 것만 제거"하는 역할이고,
+#     실제 관련도 판단은 rerank_score(judge_stage2)에서 이뤄지도록 한다.
+#   - 실측 후에는 타입별로(web/book/video) 분리해 조정한다.
+JUDGE_STAGE1_THRESHOLD = 0.5
+
+
+def judge_stage1(state: GraphState) -> GraphState:
+    """LLM 호출 없는 점수 기반 예비 필터. rerank로 넘길 후보(qualified_documents)를 고른다."""
+    logger.debug("[Judge Stage1]")
 
     docs = state.get("documents", [])
+    qualified = [
+        d for d in docs
+        if (1 - d.get("score", 1.0)) >= JUDGE_STAGE1_THRESHOLD
+    ]
 
-    if not docs:
-        logger.warning("[Judge] No documents → not_resolved")
-        return {
-            **state,
-            "judgement": "not_resolved"
-        }
+    judgement = "pending_rerank" if qualified else "not_resolved"
 
-    logger.debug("[Judge] Documents found → resolved")
+    if not qualified:
+        logger.warning("[Judge Stage1] 통과 문서 없음 → not_resolved")
+    else:
+        logger.debug("[Judge Stage1] %d/%d개 통과 → pending_rerank", len(qualified), len(docs))
+
+    get_langfuse_client().update_current_span(
+        input={"document_count": len(docs), "threshold": JUDGE_STAGE1_THRESHOLD},
+        output={"judgement": judgement, "qualified_count": len(qualified)},
+    )
 
     return {
         **state,
-        "judgement": "resolved"
+        "judgement": judgement,
+        "qualified_documents": qualified,
     }
+
+
+# judge_stage2: rerank 결과를 LLM에게 배치로 보여주고 관련도를 판정.
+# "관대한 기본값 + 명백한 이탈만 차단" 원칙의 placeholder 프롬프트 — 실측 후 문구 조정.
+def judge_stage2(state: GraphState) -> GraphState:
+    """reranked_documents를 대상으로 배치 LLM 콜 1회로 최종 관련도 판정."""
+    logger.debug("[Judge Stage2]")
+
+    docs = state.get("reranked_documents", [])
+    question = state.get("rewritten_question") or state["question"]
+
+    if not docs:
+        logger.warning("[Judge Stage2] reranked_documents 없음 → not_resolved")
+        get_langfuse_client().update_current_span(
+            input={"document_count": 0},
+            output={"judgement": "not_resolved"},
+        )
+        return {**state, "judgement": "not_resolved"}
+
+    summary = "\n".join(
+        f"[{i+1}] {d.get('title', d.get('book', ''))}: {d.get('content', '')[:150]}"
+        for i, d in enumerate(docs)
+    )
+
+    res = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=[{
+            "role": "user",
+            "content": f"""아래 문서들이 질문에 답하기에 명백히 무관한 경우에만 false,
+그 외에는 모두 true를 출력하세요.
+
+질문: {question}
+
+문서:
+{summary}
+
+true 또는 false만 출력.""",
+        }],
+        temperature=0,
+        name="judge-stage2-relevance",
+        **reasoning_kwargs(),
+    )
+
+    answer = extract_final_answer(res.choices[0].message)
+    judgement = "resolved" if "false" not in answer.lower() else "not_resolved"
+
+    logger.debug("[Judge Stage2] LLM 판정: %s → %s", answer.strip(), judgement)
+
+    get_langfuse_client().update_current_span(
+        input={"question": question, "document_count": len(docs)},
+        output={"judgement": judgement, "raw_answer": answer},
+    )
+
+    return {**state, "judgement": judgement}
 
 def rewrite_question(state: GraphState) -> GraphState:
     logger.info("[Rewrite]")
@@ -241,7 +387,12 @@ def rewrite_question(state: GraphState) -> GraphState:
     prompt_rewriter = ChatPromptTemplate.from_messages([
         (
             "system",
-            "당신은 RAG 검색 성능을 높이기 위해 질문을 더 명확하고 구체적으로 재작성하는 전문가입니다."
+            "당신은 '성경적 창조론/창조과학' 주제를 다루는 RAG 챗봇의 검색 쿼리 재작성 전문가입니다.\n\n"
+            "규칙:\n"
+            "1. 반드시 재작성된 검색 쿼리 '한 문장만' 출력하세요. 설명, 되묻기, 여러 개의 후보, 마크다운 강조(**) 등은 절대 포함하지 마세요.\n"
+            "2. 원 질문이 모호하거나 일반적인 단어(예: '배', '크기', '나이')를 포함하면, 이 챗봇의 도메인(창조과학, 성경, 노아의 방주, 창조/진화 논쟁, 화석, 연대문제 등)에 맞춰 가장 그럴듯한 의미로 구체화하세요. "
+            "예: '배의 크기가 궁금해' → '노아의 방주 크기와 규모'\n"
+            "3. 사용자에게 되묻거나 여러 선택지를 제시하지 말고, 검색에 바로 쓸 수 있는 하나의 명확한 쿼리로 확정해서 출력하세요."
         ),
         (
             "human",
@@ -260,7 +411,8 @@ def rewrite_question(state: GraphState) -> GraphState:
                         "content": p.to_string()
                     }
                 ],
-                temperature=0
+                temperature=0,
+                name="generate-rewritten-question",
             ).choices[0].message.content
         )
         | StrOutputParser()
@@ -272,26 +424,49 @@ def rewrite_question(state: GraphState) -> GraphState:
 
     logger.debug("[Rewrite] Rewritten question: %s", rewritten)
 
+    get_langfuse_client().update_current_span(
+        input={"question": question, "iteration": iteration},
+        output={"rewritten_question": rewritten},
+    )
+
     return {
         **state,
         "rewritten_question": rewritten,
         "iteration": iteration + 1
     }
 
-# ==================== Conditional Edge ====================
-def decide_to_rewrite(
-    state: GraphState
-) -> Literal["rewrite", "end"]:
+# ==================== Conditional Edges ====================
+# 재시도 카운터(iteration)는 stage1/stage2가 공유한다 — 전체 그래프 실행에서
+# rewrite는 최대 2회만 허용
+# 별도 카운터로 분리하지 않는 이유: 분리 시 rerank 실행 횟수·왕복 단계 수가
+# 최악의 경우 예측하기 어려워지기 때문 (rerank 반복 비용에 대한 근거는 문서 4-3 참고).
+MAX_REWRITE_ITERATIONS = 2
 
-    if (
-        state.get("judgement") == "not_resolved"
-        and state.get("iteration", 0) < 2
-    ):
-        logger.debug("[Decision] → Rewrite")
+
+def decide_stage1(state: GraphState) -> Literal["rerank", "rewrite", "fallback"]:
+    if state.get("judgement") == "pending_rerank":
+        logger.debug("[Decision Stage1] → rerank")
+        return "rerank"
+
+    if state.get("iteration", 0) < MAX_REWRITE_ITERATIONS:
+        logger.debug("[Decision Stage1] → rewrite")
         return "rewrite"
 
-    logger.debug("[Decision] → Search completed")
-    return "end"
+    logger.debug("[Decision Stage1] → fallback")
+    return "fallback"
+
+
+def decide_stage2(state: GraphState) -> Literal["generate", "rewrite", "fallback"]:
+    if state.get("judgement") == "resolved":
+        logger.debug("[Decision Stage2] → generate")
+        return "generate"
+
+    if state.get("iteration", 0) < MAX_REWRITE_ITERATIONS:
+        logger.debug("[Decision Stage2] → rewrite")
+        return "rewrite"
+
+    logger.debug("[Decision Stage2] → fallback")
+    return "fallback"
 
 # ==================== Graph Build ====================
 def create_graph():
@@ -299,30 +474,50 @@ def create_graph():
 
     workflow.add_node("route", route_question)
     workflow.add_node("retrieve", retrieve_documents)
-    workflow.add_node("judge", judge_documents)
+    workflow.add_node("judge_stage1", judge_stage1)
+    workflow.add_node("rerank", rerank_node)
+    workflow.add_node("judge_stage2", judge_stage2)
     workflow.add_node("rewrite", rewrite_question)
+    workflow.add_node("generate", generate_node)
+    workflow.add_node("fallback", fallback_node)
 
     workflow.set_entry_point("route")
 
     workflow.add_edge("route", "retrieve")
-    workflow.add_edge("retrieve", "judge")
+    workflow.add_edge("retrieve", "judge_stage1")
 
     workflow.add_conditional_edges(
-        "judge",
-        decide_to_rewrite,
+        "judge_stage1",
+        decide_stage1,
         {
+            "rerank": "rerank",
             "rewrite": "rewrite",
-            "end": END
+            "fallback": "fallback",
+        }
+    )
+
+    workflow.add_edge("rerank", "judge_stage2")
+
+    workflow.add_conditional_edges(
+        "judge_stage2",
+        decide_stage2,
+        {
+            "generate": "generate",
+            "rewrite": "rewrite",
+            "fallback": "fallback",
         }
     )
 
     workflow.add_edge("rewrite", "retrieve")
+    workflow.add_edge("generate", END)
+    workflow.add_edge("fallback", END)
 
     return workflow.compile(
         checkpointer=MemorySaver()
     )
 
 # ==================== Reranking ====================
+@observe(name="rerank-context", as_type="tool", capture_input=False, capture_output=False)
 def rerank_documents(question: str, docs: list[dict], top_k: int = 5) -> list[dict]:
     """Cross-Encoder로 15개 문서를 재정렬해 top_k개만 반환"""
     if not docs:
@@ -343,106 +538,78 @@ def rerank_documents(question: str, docs: list[dict], top_k: int = 5) -> list[di
         cosine_sim = 1 - d.get("score", 0)
         logger.debug("  [%s] cosine_sim=%.4f  rerank=%.3f // %s", d.get('type', '?'), cosine_sim, d['rerank_score'], d.get('title', d.get('book', ''))[:40])
 
+    get_langfuse_client().update_current_span(
+        input={"question": question, "candidate_count": len(docs)},
+        output={"selected_count": len(ranked), "top_k": top_k},
+    )
+
     return ranked
 
-# ==================== Final Generate ====================
 
-def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CACHE):
-    logger.info("===== Integrated Search Started ===== question=%s", question)
+# ==================== Rerank Node ====================
+def rerank_node(state: GraphState) -> GraphState:
+    """judge_stage1을 통과한 qualified_documents만 대상으로 Cross-Encoder 재정렬.
+    top_k(5)로 압축하고, 출처 분류(sources)까지 이 노드에서 함께 확정한다.
+    기존 rerank_documents()/classify_documents()를 그대로 재사용한다."""
+    logger.debug("[Rerank Node]")
 
-    # if not is_creation_question(question):
-    #     return "창조과학 질문만 처리합니다.", {}
+    qualified = state.get("qualified_documents", [])
+    question = state.get("rewritten_question") or state["question"]
 
-    normalized_question = normalize_query(question)
+    ranked = rerank_documents(question, qualified, top_k=5)
 
-    logger.debug("[Normalized Query]: %s", normalized_question)
+    web_docs, book_docs, video_docs = classify_documents(ranked)
 
-    if use_cache:
-        # Exact Redis Cache 확인
-        cached = get_cached_answer(normalized_question)
-        if cached:
-            return cached["answer"], cached["sources"]
-
-        # Semantic Cache 확인
-        semantic_cached = search_semantic_cache(question)
-        if semantic_cached:
-            return semantic_cached["answer"], semantic_cached["sources"]
-    elif _REDIS_AVAILABLE:
-        # 캐시 비활성화 시에도 유사도 점수만 로그로 확인
-        _keys = list(_redis_client.scan_iter(f"{CACHE_KEY_PREFIX}*"))
-        if _keys:
-            _q_emb = get_embedding(question)
-            logger.debug("[Similarity Log (cache OFF)]")
-            for _key in _keys:
-                _raw = _redis_client.get(_key)
-                if not _raw:
-                    continue
-                _item = json.loads(_raw)
-                if len(_item.get("embedding", [])) != len(_q_emb):
-                    continue  # 다른 provider로 저장된 옛 데이터는 로그에서도 스킵
-                _score = _cosine_similarity([_q_emb], [_item["embedding"]])[0][0]
-                logger.debug("  score=%.4f | cached_query='%s'", _score, _item['query'])
-
-
-    # LangGraph 실행
-    graph = create_graph()
-
-    graph_result = graph.invoke(
-        {
-            "question": question,
-            "rewritten_question": "",
-            "route": "",
-            "documents": [],
-            "judgement": "",
-            "iteration": 0,
-            "chat_history": []
+    return {
+        **state,
+        "reranked_documents": ranked,
+        "sources": {
+            "web_docs": web_docs,
+            "book_docs": book_docs,
+            "video_docs": video_docs,
         },
-        {
-            "configurable": {
-                "thread_id": thread_id
-            }
-        }
+    }
+
+
+# ==================== Fallback Node ====================
+FALLBACK_MESSAGE = (
+    "제공된 자료만으로는 충분히 신뢰할 수 있는 답변을 드리기 어렵습니다. "
+    "질문을 조금 더 구체적으로 작성해 주시면 더 정확한 답변을 드릴 수 있습니다."
+)
+
+# ==================== Off-topic Message ====================
+# is_creation_question()이 서비스 범위와 명백히 무관하다고 판단했을 때 반환하는 안내 메시지.
+# generate()/generate_stream() 진입부(그래프 실행 전)에서 사용된다.
+OFF_TOPIC_MESSAGE = (
+    "죄송합니다. 이 챗봇은 성경적 창조론 및 관련 신앙/과학 주제(창조와 진화, "
+    "성경의 역사성, 생명과 우주의 기원 등)를 다루고 있습니다. "
+    "관련된 질문을 해주시면 답변드리겠습니다."
+)
+
+
+def fallback_node(state: GraphState) -> GraphState:
+    """judge_stage1/2가 재시도 소진 후에도 실패했을 때 LLM 호출 없이 즉시 반환할 메시지."""
+    logger.warning("[Fallback] 충분한 근거를 찾지 못함 → 답변 생성 중단")
+
+    get_langfuse_client().update_current_span(
+        input={"iteration": state.get("iteration", 0)},
+        output={"fallback_message": FALLBACK_MESSAGE},
     )
 
-    all_docs = graph_result.get("documents", [])
-    judgement = graph_result.get("judgement", "")
-    chat_history = graph_result.get("chat_history", [])
-    history_text = format_chat_history(chat_history)
+    return {
+        **state,
+        "fallback_message": FALLBACK_MESSAGE,
+    }
 
-    if judgement == "not_resolved":
-        logger.warning("충분한 근거를 찾지 못함 → 답변 생성 중단")
 
-        return (
-            "제공된 자료만으로는 충분히 신뢰할 수 있는 답변을 드리기 어렵습니다. "
-            "질문을 조금 더 구체적으로 작성해 주시면 더 정확한 답변을 드릴 수 있습니다.",
-            {}
-        )
-
-    if not all_docs:
-        return "❌ 관련 정보를 찾을 수 없습니다.", {}
-
-    # Reranking: 15개 → top-5 선별
-    all_docs = rerank_documents(question, all_docs, top_k=5)
-
-    # 중요: video 먼저 분류
-    web_docs, book_docs, video_docs = classify_documents(all_docs)
-
-    # images 확인 로그
-    for doc in book_docs:
-        imgs = doc.get("images", [])
-        logger.debug("[%s p%s] 이미지 %d개: %s", doc.get('book'), doc.get('page'), len(imgs), imgs)
-
-    lang_instruction = (
-        "한국어로 답변하세요."
-        if detect_language(question) == "ko"
-        else "Answer in English."
-    )
-
+# ==================== Context 조립 헬퍼 ====================
+def _build_context(video_docs: list[dict], web_docs: list[dict], book_docs: list[dict]) -> str:
+    """video → web → book 순서로 컨텍스트 텍스트 블록을 조립.
+    기존 generate()/generate_stream()에 중복 구현되어 있던 로직을 하나로 통합."""
     context_parts = []
 
     if video_docs:
         context_parts.append("🎬 Video Resources")
-
         for i, doc in enumerate(video_docs, 1):
             context_parts.append(
                 f"[Video {i}] "
@@ -450,36 +617,25 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
                 f"({format_timedelta(doc.get('start', 0))}"
                 f" ~ {format_timedelta(doc.get('end', 0))})"
             )
-            context_parts.append(
-                doc.get("content", "")[:800]
-            )
+            context_parts.append(doc.get("content", "")[:800])
 
     if web_docs:
         context_parts.append("📰 Web Resources")
-
         for i, doc in enumerate(web_docs, 1):
-            context_parts.append(
-                f"[Web {i}] {doc.get('title', '')}"
-            )
-            context_parts.append(
-                doc.get("content", "")[:800]
-            )
+            context_parts.append(f"[Web {i}] {doc.get('title', '')}")
+            context_parts.append(doc.get("content", "")[:800])
 
     if book_docs:
         context_parts.append("📖 Book Resources")
-
         for i, doc in enumerate(book_docs, 1):
-            context_parts.append(
-                f"[{doc.get('book', '')} "
-                f"p{doc.get('page', '')}]"
-            )
-            context_parts.append(
-                doc.get("content", "")[:800]
-            )
+            context_parts.append(f"[{doc.get('book', '')} p{doc.get('page', '')}]")
+            context_parts.append(doc.get("content", "")[:800])
 
-    context = "\n".join(context_parts)
+    return "\n".join(context_parts)
 
-    system_prompt = f"""[Role & Identity]
+
+# ==================== 시스템 프롬프트 ====================
+SYSTEM_PROMPT_TEMPLATE = """[Role & Identity]
 당신은 '성경적 창조론 가이드'입니다. 당신은 모든 사물과 생명이 하나님의 지혜와 설계에 의해 창조되었다는 확고한 기독교 세계관을 가지고 답변합니다. 사용자의 과학적, 신학적 질문에 대해 성경의 권위를 인정하며 창조과학적 관점에서 답변을 제공하는 것이 당신의 사명입니다.
 
 [Core Principles]
@@ -499,24 +655,227 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
 
 {lang_instruction}"""
 
+
+# ==================== Generate Node ====================
+def generate_node(state: GraphState) -> GraphState:
+    """reranked_documents/sources만을 참조하여 최종 LLM 입력 메시지(final_messages)를 조립.
+    실제 LLM 호출(스트리밍 여부 분기)은 이 노드에서 수행하지 않고 그래프 밖 어댑터가 담당한다."""
+    logger.debug("[Generate Node]")
+
+    question = state["question"]
+    chat_history = state.get("chat_history", [])
+
+    sources = state.get("sources", {})
+    web_docs = sources.get("web_docs", [])
+    book_docs = sources.get("book_docs", [])
+    video_docs = sources.get("video_docs", [])
+
+    context = _build_context(video_docs, web_docs, book_docs)
+    lang_instruction = (
+        "한국어로 답변하세요."
+        if detect_language(question) == "ko"
+        else "Answer in English."
+    )
+    history_text = format_chat_history(chat_history)
+
+    system_prompt = SYSTEM_PROMPT_TEMPLATE.format(lang_instruction=lang_instruction)
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": (
+                f"[이전 대화]\n{history_text}\n\n"
+                f"[자료]\n{context}\n\n"
+                f"[질문]\n{question}"
+            ),
+        },
+    ]
+
+    get_langfuse_client().update_current_span(
+        input={"question": question},
+        output={
+            "web_docs": len(web_docs),
+            "book_docs": len(book_docs),
+            "video_docs": len(video_docs),
+        },
+    )
+
+    return {
+        **state,
+        "final_messages": messages,
+    }
+
+# ==================== 캐시 조회/저장 공용 헬퍼 ====================
+# generate()/generate_stream()에 중복 구현되어 있던
+# exact/semantic 캐시 조회, cache-off 유사도 로깅, 캐시 저장 로직을 통합.
+#
+# 조회 결과 소비 방식(return vs SSE yield)이 두 함수에서 다르므로,
+# 조회 함수는 "히트 여부 + 데이터"만 반환하고 실제 응답 처리는 호출부에 남긴다.
+
+def lookup_answer_cache(question: str, normalized_question: str, use_cache: bool) -> tuple[str | None, dict | None]:
+    """
+    Exact → Semantic 순서로 캐시 조회.
+    use_cache=False인 경우 조회 대신 유사도 점수만 로그로 남기고 (None, None) 반환.
+
+    Returns:
+        (cache_hit_type, data) — hit 시 cache_hit_type은 "exact" 또는 "semantic",
+        data는 {"answer": ..., "sources": ...}. 미스 시 (None, None).
+    """
+    if use_cache:
+        cached = get_cached_answer(normalized_question)
+        if cached:
+            return "exact", cached
+
+        semantic_cached = search_semantic_cache(question)
+        if semantic_cached:
+            return "semantic", semantic_cached
+
+        return None, None
+
+    if _REDIS_AVAILABLE:
+        # 캐시 비활성화 시에도 유사도 점수만 로그로 확인
+        _keys = list(_redis_client.scan_iter(f"{CACHE_KEY_PREFIX}*"))
+        if _keys:
+            _q_emb = get_embedding(question)
+            logger.debug("[Similarity Log (cache OFF)]")
+            for _key in _keys:
+                _raw = _redis_client.get(_key)
+                if not _raw:
+                    continue
+                _item = json.loads(_raw)
+                if len(_item.get("embedding", [])) != len(_q_emb):
+                    continue  # 다른 provider로 저장된 옛 데이터는 로그에서도 스킵
+                _score = _cosine_similarity([_q_emb], [_item["embedding"]])[0][0]
+                logger.debug("  score=%.4f | cached_query='%s'", _score, _item['query'])
+
+    return None, None
+
+
+def persist_answer_cache(use_cache: bool, normalized_question: str, question: str, answer: str, sources: dict) -> None:
+    """use_cache=True일 때만 캐시에 저장.
+    Redis 등 캐시 저장 실패가 API 응답 자체를 실패시키면 안 되므로
+    (fail-open) 예외 처리를 이 함수 내부에서 담당한다 — 호출부는 신경 쓸 필요 없음."""
+    if not use_cache:
+        return
+    try:
+        save_answer_cache(
+            normalized_question,
+            question,
+            {"answer": answer, "sources": sources},
+        )
+        logger.debug("캐시 저장 완료 — question: %s", question)
+    except Exception as e:
+        logger.error("캐시 저장 실패: %s", e, exc_info=True)
+
+
+# ==================== Final Generate ====================
+
+@observe(name="generate-response", capture_input=False, capture_output=False)
+def generate(
+    question: str,
+    thread_id: str = "user_1",
+    use_cache: bool = USE_CACHE,
+    user_id: str | None = None,
+    source: str = "cli",
+):
+    langfuse = get_langfuse_client()
+
+    with propagate_attributes(
+        session_id=thread_id,
+        user_id=user_id,
+        tags=[source],
+    ):
+        langfuse.update_current_span(input={"question": question})
+
+        logger.info("===== Integrated Search Started ===== question=%s", question)
+
+    safe, reason = is_safe_input(question)
+    if not safe:
+       logger.warning("[Blocked] reason=%s | question=%s", reason, question[:200])
+       return "죄송합니다. 해당 요청은 처리할 수 없습니다.", {}
+ 
+    if not is_creation_question(question):
+        logger.info("[Off-topic] question=%s", question[:200])
+        langfuse.update_current_span(
+            output=OFF_TOPIC_MESSAGE,
+            metadata={"judgement": "off_topic"},
+        )
+        return OFF_TOPIC_MESSAGE, {}
+
+    normalized_question = normalize_query(question)
+
+    logger.debug("[Normalized Query]: %s", normalized_question)
+
+    cache_hit_type, cached = lookup_answer_cache(question, normalized_question, use_cache)
+    if cached:
+        langfuse.update_current_span(
+            output=cached["answer"],
+            metadata={"cache_hit": cache_hit_type},
+        )
+        return cached["answer"], cached["sources"]
+
+    # LangGraph 실행 — callbacks에 Langfuse 핸들러를 넘겨서
+    # route/retrieve/judge_stage1/rerank/judge_stage2/rewrite/generate/fallback
+    # 노드 전체가 하나의 invoke() 아래에서 자동으로 트레이싱되게 함
+    graph = create_graph()
+
+    graph_result = graph.invoke(
+        {
+            "question": question,
+            "rewritten_question": "",
+            "route": "",
+            "documents": [],
+            "judgement": "",
+            "iteration": 0,
+            "chat_history": [],
+            "qualified_documents": [],
+            "reranked_documents": [],
+            "sources": {},
+            "final_messages": [],
+            "fallback_message": "",
+        },
+        {
+            "configurable": {
+                "thread_id": thread_id
+            },
+            "callbacks": [_langfuse_langchain_handler],
+        }
+    )
+
+    chat_history = graph_result.get("chat_history", [])
+
+    # judge_stage1/2가 재시도 소진 후에도 실패 → fallback 노드가 채운 메시지를
+    # LLM 호출 없이 그대로 반환
+    if graph_result.get("fallback_message"):
+        answer = graph_result["fallback_message"]
+        langfuse.update_current_span(
+            output=answer,
+            metadata={"judgement": "not_resolved"},
+        )
+        return answer, {}
+
+    reranked_docs = graph_result.get("reranked_documents", [])
+    sources_by_type = graph_result.get("sources", {})
+    web_docs = sources_by_type.get("web_docs", [])
+    book_docs = sources_by_type.get("book_docs", [])
+    video_docs = sources_by_type.get("video_docs", [])
+
+    # images 확인 로그
+    for doc in book_docs:
+        imgs = doc.get("images", [])
+        logger.debug("[%s p%s] 이미지 %d개: %s", doc.get('book'), doc.get('page'), len(imgs), imgs)
+
+    messages = graph_result["final_messages"]
+
     logger.debug("[Generate]")
 
     res = client.chat.completions.create(
         model=LLM_MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content":
-                    f"[이전 대화]\n{history_text}\n\n"
-                    f"[자료]\n{context}\n\n"
-                    f"[질문]\n{question}"
-            }
-        ],
-        temperature=0
+        messages=messages,
+        temperature=0,
+        name="generate-final-answer",
+        **reasoning_kwargs(),
     )
 
     answer = extract_final_answer(res.choices[0].message)
@@ -533,53 +892,75 @@ def generate(question: str, thread_id: str = "user_1", use_cache: bool = USE_CAC
         "web_docs": web_docs,
         "book_docs": book_docs,
         "chat_history": updated_history,
-        "top_sources": all_docs,
+        "top_sources": reranked_docs,
     }
 
-    if use_cache:
-        save_answer_cache(
-            normalized_question,
-            question,
-            {
-                "answer": answer,
-                "sources": sources
-            }
-        )
+    langfuse.update_current_span(
+        output=answer,
+        metadata={
+            "web_docs": len(web_docs),
+            "book_docs": len(book_docs),
+            "video_docs": len(video_docs),
+        },
+    )
+
+    persist_answer_cache(use_cache, normalized_question, question, answer, sources)
 
     return answer, sources
 
 
 # ==================== Streaming Generate ====================
 
-def generate_stream(question: str, thread_id: str = "user_1", use_cache: bool = USE_CACHE) -> Generator[str, None, None]:
+@observe(name="generate-response-stream", capture_input=False, capture_output=False)
+def generate_stream(
+    question: str,
+    thread_id: str = "user_1",
+    use_cache: bool = USE_CACHE,
+    user_id: str | None = None,
+    source: str = "cli",
+) -> Generator[str, None, None]:
     """답변을 SSE 형식으로 스트리밍. 토큰→[DONE]→[SOURCES]→[SESSION] 순서로 yield"""
 
-    # if not is_creation_question(question):
-    #     yield "data: 창조과학 질문만 처리합니다.\n\n"
-    #     yield "data: [DONE]\n\n"
-    #     return
+    langfuse = get_langfuse_client()
+
+    safe, reason = is_safe_input(question)
+    if not safe:
+       logger.warning("[Blocked-Stream] reason=%s | question=%s", reason, question[:200])
+       yield "data: 죄송합니다. 해당 요청은 처리할 수 없습니다.\n\n"
+       yield "data: [DONE]\n\n"
+       return
+ 
+    if not is_creation_question(question):
+        logger.info("[Off-topic-Stream] question=%s", question[:200])
+        yield f"data: {OFF_TOPIC_MESSAGE}\n\n"
+        yield "data: [DONE]\n\n"
+        langfuse.update_current_span(
+            output=OFF_TOPIC_MESSAGE,
+            metadata={"judgement": "off_topic"},
+        )
+        return
 
     normalized_question = normalize_query(question)
 
     # ---------- 캐시 조회 ----------
-    if use_cache:
-        cached = get_cached_answer(normalized_question)
-        if not cached:
-            cached = search_semantic_cache(question)
+    cache_hit_type, cached = lookup_answer_cache(question, normalized_question, use_cache)
+    if cached:
+        logger.info("Cache Hit (stream, %s) — question: %s", cache_hit_type, question)
+        answer = cached["answer"]
+        sources = cached["sources"]
 
-        if cached:
-            logger.info("Cache Hit (stream) — question: %s", question)
-            answer = cached["answer"]
-            sources = cached["sources"]
+        for i in range(0, len(answer), 20):
+            piece = answer[i:i+20].replace("\n", "\\n")
+            yield f"data: {piece}\n\n"
 
-            # 저장된 답변을 chunk 단위로 스트리밍 (기존 프론트 파싱 방식 유지)
-            for i in range(0, len(answer), 20):
-                piece = answer[i:i+20].replace("\n", "\\n")
-                yield f"data: {piece}\n\n"
+        yield "data: [DONE]\n\n"
+        yield f"data: [SOURCES]{json.dumps(sources, ensure_ascii=False)}\n\n"
 
-            yield "data: [DONE]\n\n"
-            yield f"data: [SOURCES]{json.dumps(sources, ensure_ascii=False)}\n\n"
-            return
+        langfuse.update_current_span(
+            output=answer,
+            metadata={"cache_hit": cache_hit_type},
+        )
+        return
     # ---------- 캐시 조회 끝 ----------
 
     graph = create_graph()
@@ -591,105 +972,71 @@ def generate_stream(question: str, thread_id: str = "user_1", use_cache: bool = 
             "documents": [],
             "judgement": "",
             "iteration": 0,
-            "chat_history": []
+            "chat_history": [],
+            "qualified_documents": [],
+            "reranked_documents": [],
+            "sources": {},
+            "final_messages": [],
+            "fallback_message": "",
         },
-        {"configurable": {"thread_id": thread_id}}
+        {
+            "configurable": {"thread_id": thread_id},
+            "callbacks": [_langfuse_langchain_handler],
+        }
     )
 
-    all_docs     = graph_result.get("documents", [])
-    judgement    = graph_result.get("judgement", "")
-    chat_history = graph_result.get("chat_history", [])
-    history_text = format_chat_history(chat_history)
-
-    if judgement == "not_resolved" or not all_docs:
-        msg = (
-            "제공된 자료만으로는 충분히 신뢰할 수 있는 답변을 드리기 어렵습니다. "
-            "질문을 조금 더 구체적으로 작성해 주시면 더 정확한 답변을 드릴 수 있습니다."
-        )
+    # judge_stage1/2가 재시도 소진 후에도 실패 → fallback 노드가 채운 메시지를
+    # LLM 호출 없이 그대로 스트리밍
+    if graph_result.get("fallback_message"):
+        msg = graph_result["fallback_message"]
         yield f"data: {msg}\n\n"
         yield "data: [DONE]\n\n"
+
+        langfuse.update_current_span(
+            output=msg,
+            metadata={"judgement": "not_resolved"},
+        )
         return
 
-    all_docs = rerank_documents(question, all_docs, top_k=5)
+    reranked_docs = graph_result.get("reranked_documents", [])
+    sources_by_type = graph_result.get("sources", {})
+    web_docs = sources_by_type.get("web_docs", [])
+    book_docs = sources_by_type.get("book_docs", [])
+    video_docs = sources_by_type.get("video_docs", [])
 
-    web_docs, book_docs, video_docs = classify_documents(all_docs)
-
-    lang_instruction = (
-        "한국어로 답변하세요." if detect_language(question) == "ko" else "Answer in English."
-    )
-    context_parts = []
-    if video_docs:
-        context_parts.append("🎬 Video Resources")
-        for i, doc in enumerate(video_docs, 1):
-            context_parts.append(f"[Video {i}] {doc.get('title','')} ({format_timedelta(doc.get('start',0))} ~ {format_timedelta(doc.get('end',0))})")
-            context_parts.append(doc.get("content", "")[:800])
-    if web_docs:
-        context_parts.append("📰 Web Resources")
-        for i, doc in enumerate(web_docs, 1):
-            context_parts.append(f"[Web {i}] {doc.get('title','')}")
-            context_parts.append(doc.get("content", "")[:800])
-    if book_docs:
-        context_parts.append("📖 Book Resources")
-        for i, doc in enumerate(book_docs, 1):
-            context_parts.append(f"[{doc.get('book','')} p{doc.get('page','')}]")
-            context_parts.append(doc.get("content", "")[:800])
-    context = "\n".join(context_parts)
-
-    system_prompt = f"""[Role & Identity]
-당신은 '성경적 창조론 가이드'입니다. 당신은 모든 사물과 생명이 하나님의 지혜와 설계에 의해 창조되었다는 확고한 기독교 세계관을 가지고 답변합니다. 사용자의 과학적, 신학적 질문에 대해 성경의 권위를 인정하며 창조과학적 관점에서 답변을 제공하는 것이 당신의 사명입니다.
-
-[Core Principles]
-1. 성경적 우선순위: 성경(특히 창세기)의 기록을 역사적 사실로 전제합니다.
-2. 창조론적 해석: 자연계의 복잡성을 '지적 설계'의 증거로 설명합니다.
-3. RAG 컨텍스트 준수: 검색된 창조과학적 자료의 관점을 따릅니다.
-
-[Response Strategy]
-1. 정중하고 신앙적으로 격려하는 어조를 유지하십시오.
-2. 진화론을 유일한 과학적 사실로 긍정하지 마십시오.
-3. 검색된 데이터에 기반한 구체적인 사례를 언급하십시오.
-4. 답변의 끝에는 관련된 성경 구절을 인용하십시오.
-
-[Constraint]
-- 기독교 세계관에 반하는 가치관을 정답으로 제시하지 마십시오.
-- 성경의 기록을 신화나 상징으로 격하시키는 표현을 사용하지 마십시오.
-
-{lang_instruction}"""
+    messages = graph_result["final_messages"]
 
     stream = client.chat.completions.create(
         model=LLM_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"[이전 대화]\n{history_text}\n\n[자료]\n{context}\n\n[질문]\n{question}"}
-        ],
+        messages=messages,
         temperature=0,
         stream=True,
+        name="generate-final-answer-stream",
         **reasoning_kwargs(),
     )
 
     full_answer = ""
     for chunk in stream:
+        # stream_options={"include_usage": True}를 나중에 켜서 토큰 사용량을
+        # 트레이싱하게 되면, 마지막에 choices가 빈 청크가 하나 더 오므로
+        # 이 가드가 없으면 IndexError가 남
+        if not chunk.choices:
+            continue
         delta = chunk.choices[0].delta.content
         if delta:
             full_answer += delta
             safe = delta.replace("\n", "\\n")
             yield f"data: {safe}\n\n"
 
-    yield "data: [DONE]\n\n"
-
     sources = {
         "web_docs":   web_docs,
         "book_docs":  book_docs,
         "video_docs": video_docs,
-        "top_sources": all_docs,
+        "top_sources": reranked_docs,
     }
 
     # ---------- 캐시 저장 ----------
-    if use_cache:
-        try:
-            save_answer_cache(normalized_question, question, {"answer": full_answer, "sources": sources})
-            logger.debug("캐시 저장 완료 — question: %s", question)
-        except Exception as e:
-            logger.error("캐시 저장 실패: %s", e, exc_info=True)
+    persist_answer_cache(use_cache, normalized_question, question, full_answer, sources)
     # -------------------------------
 
     yield "data: [DONE]\n\n"
