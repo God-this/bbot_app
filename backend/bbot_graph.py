@@ -263,7 +263,7 @@ def retrieve_documents(state: GraphState) -> GraphState:
 #     즉 judge_stage1은 사실상 "완전히 무관한 것만 제거"하는 역할이고,
 #     실제 관련도 판단은 rerank_score(judge_stage2)에서 이뤄지도록 한다.
 #   - 실측 후에는 타입별로(web/book/video) 분리해 조정한다.
-JUDGE_STAGE1_THRESHOLD = 0.3
+JUDGE_STAGE1_THRESHOLD = 0.5
 
 
 def judge_stage1(state: GraphState) -> GraphState:
