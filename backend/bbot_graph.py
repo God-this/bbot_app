@@ -162,6 +162,87 @@ true 또는 false만 출력.
     answer = extract_final_answer(res.choices[0].message)
     return "true" in answer.lower()
 
+
+# ==================== Off-topic 경량 필터 ====================
+# "명백히 무관"한 질문만 그래프 진입 전에 즉시 차단.
+# 애매한 경계 질문(핀치새 부리, 화석 연대 등)은 절대 여기서 거르지 않고
+# judge_stage1 / judge_stage2 (검색 결과 기반 판정) 로 넘긴다.
+# ⚠️ 키워드/패턴은 확정값이 아님 — 실제 서비스 로그 보면서 튜닝 필요.
+
+OFFTOPIC_MESSAGE = "창조과학/성경 관련 질문에 답변하는 챗봇입니다. 관련된 질문을 해주세요."
+
+# 이 중 하나라도 포함되면 아래 off-topic 패턴에 걸려도 무조건 통과(차단 안 함).
+_DOMAIN_OVERRIDE_KEYWORDS = [
+    "성경", "창조", "진화", "화석", "공룡", "노아", "홍수", "방주",
+    "하나님", "여호와", "예수", "천지창조", "창세기", "에덴", "아담", "이브",
+    "빅뱅", "우주", "지구 나이", "지구나이", "연대측정", "연대 측정",
+    "인류 기원", "인류기원", "생명 기원", "생명기원", "다윈", "자연선택", "자연 선택",
+    "돌연변이", "캄브리아", "대격변", "지층", "화석기록", "화석 기록",
+    "천문학", "지질학", "고생물학", "dna", "유전자", "지적설계", "지적 설계",
+    "간극이론", "갭이론", "창조과학", "창조론", "구속사",
+]
+
+_OFFTOPIC_PATTERNS: dict[str, list[re.Pattern]] = {
+    # 인사말/잡담: 문장 전체가 이것만 있을 때만 차단 (부분 매칭 X)
+    "greeting": [
+        re.compile(r"^(안녕|안녕하세요|하이|hi|hello|hey|반가워요?|ㅎㅇ|굿모닝|좋은\s?아침)\s*[!~.,]*\s*$", re.IGNORECASE),
+        re.compile(r"^(뭐\s?해|심심해|잘\s?지내\??|고마워|고맙습니다|수고했어)\s*[!~.,?]*\s*$"),
+    ],
+    "weather": [
+        re.compile(r"(오늘|내일|이번\s?주)?\s?날씨"),
+        re.compile(r"미세먼지|우산\s?챙겨"),
+    ],
+    "coding": [
+        re.compile(r"파이썬|자바스크립트|javascript|typescript|\bjava\b|c\+\+|c#", re.IGNORECASE),
+        re.compile(r"코딩|프로그래밍|디버깅|리눅스\s?명령어|docker|git\s?사용법|sql\s?쿼리|정규식", re.IGNORECASE),
+        re.compile(r"코드\s?(짜|작성|만들어)\s?줘"),
+    ],
+    "math_homework": [
+        re.compile(r"미적분|방정식\s?풀이|인수분해|확률\s?문제|통계\s?문제|수학\s?문제\s?풀어"),
+    ],
+    "cooking": [
+        re.compile(r"레시피|요리\s?법|맛있게\s?만드는\s?법"),
+    ],
+    "travel": [
+        re.compile(r"여행지\s?추천|여행\s?코스|맛집\s?추천|항공권"),
+    ],
+    "sports": [
+        re.compile(r"축구\s?경기\s?결과|야구\s?스코어|프로야구\s?순위|월드컵\s?일정|nba\s?결과", re.IGNORECASE),
+    ],
+    "finance": [
+        re.compile(r"주식\s?추천|부동산\s?시세|코인\s?시세|환율\s?알려"),
+    ],
+    "entertainment": [
+        re.compile(r"드라마\s?추천|영화\s?추천|아이돌\s?컴백|연예인\s?소식"),
+    ],
+    "shopping": [
+        re.compile(r"최저가|쇼핑몰\s?추천|상품\s?추천해"),
+    ],
+}
+
+
+def classify_offtopic(question: str) -> str | None:
+    """디버깅/로그용: 어떤 카테고리에 걸렸는지 반환. 안 걸리면 None."""
+    q = question.strip()
+    if not q:
+        return None
+
+    # 도메인 보호 키워드 있으면 무조건 통과
+    if any(kw in q for kw in _DOMAIN_OVERRIDE_KEYWORDS):
+        return None
+
+    for category, patterns in _OFFTOPIC_PATTERNS.items():
+        for pattern in patterns:
+            if pattern.search(q):
+                return category
+
+    return None
+
+
+def is_obviously_offtopic(question: str) -> bool:
+    """True면 명백히 무관 → 그래프 진입 전 즉시 차단."""
+    return classify_offtopic(question) is not None
+
 # ==================== Parallel Retrieval ====================
 def deduplicate_docs(docs: list[dict]) -> list[dict]:
     seen = set()
@@ -756,8 +837,13 @@ def generate(
        logger.warning("[Blocked] reason=%s | question=%s", reason, question[:200])
        return "죄송합니다. 해당 요청은 처리할 수 없습니다.", {}
 
-    # if not is_creation_question(question):
-    #     return "창조과학 질문만 처리합니다.", {}
+    if is_obviously_offtopic(question):
+        logger.info("[Offtopic] question=%s", question[:200])
+        langfuse.update_current_span(
+            output=OFFTOPIC_MESSAGE,
+            metadata={"offtopic": True},
+        )
+        return OFFTOPIC_MESSAGE, {}
 
     normalized_question = normalize_query(question)
 
@@ -886,10 +972,15 @@ def generate_stream(
        yield "data: [DONE]\n\n"
        return
 
-    # if not is_creation_question(question):
-    #     yield "data: 창조과학 질문만 처리합니다.\n\n"
-    #     yield "data: [DONE]\n\n"
-    #     return
+    if is_obviously_offtopic(question):
+        logger.info("[Offtopic-Stream] question=%s", question[:200])
+        yield f"data: {OFFTOPIC_MESSAGE}\n\n"
+        yield "data: [DONE]\n\n"
+        langfuse.update_current_span(
+            output=OFFTOPIC_MESSAGE,
+            metadata={"offtopic": True},
+        )
+        return
 
     normalized_question = normalize_query(question)
 
