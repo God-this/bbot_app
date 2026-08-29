@@ -127,6 +127,43 @@ def normalize_query(query: str) -> str:
     return query
 
 # ==================== Question Filter ====================
+# 판정 원칙: 기본값은 "통과(true)". 서비스 범위와 "명백히 무관한" 질문만 false로 차단한다.
+# (이전 버전은 좁은 키워드 목록에 안 걸리면 false로 판정해 정상 질문을 자주 차단하는
+#  문제가 있었음 — 판정 기준 자체를 "관련 있으면 true"에서 "명백히 무관하면 false"로 반전)
+CREATION_TOPIC_CLASSIFIER_PROMPT = """당신은 '성경적 창조론 챗봇'의 질문 필터입니다.
+이 챗봇의 서비스 범위는 다음과 같습니다.
+ 
+[서비스 범위 — 아래 중 하나라도 해당하면 관련 있음]
+1. 창조론 vs 진화론 (창조설계, 지적설계, 자연선택, 공통조상, 자연주의 등)
+2. 성경의 역사성 (창세기, 노아의 홍수, 방주, 족장 연대, 바벨탑, 출애굽 등)
+3. 지구/우주의 기원과 나이 (지질연대, 방사성동위원소 연대측정, 빅뱅, 우주론, 천문학)
+4. 생명의 기원과 다양성 (화석 기록, 캄브리아기 폭발, 종 분화, 유전학적 다양성, DNA 정보성, 자연선택/돌연변이의 한계)
+5. 인류의 기원 (고인류학, 아담과 하와, 인종 기원, 네안데르탈인 등)
+6. 신앙과 과학의 관계 일반 (신학적 관점에서의 과학 이슈, 기독교 세계관, 성경무오성)
+7. 위 주제들과 자연스럽게 연결되는 후속·파생 질문
+   (예: "그럼 공룡은 왜 멸종했나요?", "핀치새 부리는 왜 그런가요?", "빙하기는 성경적으로 어떻게 설명하나요?" 등
+    — 대화 맥락상 창조과학 주제의 하위 질문이거나, 창조과학 담론에서 흔히 다뤄지는 소재)
+ 
+[판정 원칙 — 반드시 지킬 것]
+- 기본값은 "관련 있음(true)"이다. 질문이 위 범위와 조금이라도 연결될 가능성이 있으면 true로 판단한다.
+- false는 아래처럼 서비스 범위와 "명백히, 확실하게" 무관한 질문에만 사용한다:
+  · 순수 일상/시사 (오늘 날씨, 스포츠 경기 결과, 연예 뉴스, 정치 이슈 등)
+  · 순수 기술/생활 정보 (프로그래밍 코드 작성, 요리 레시피, 여행 일정, 쇼핑 추천 등)
+  · 창조과학 맥락이 전혀 없는 순수 수학/물리 계산 문제
+  · 챗봇 사용법이나 시스템 오류 문의 등 서비스 운영 관련 질문
+  · 위 서비스 범위 어떤 항목과도 개념적 연결고리를 찾을 수 없는 질문
+- 질문이 한 단어나 짧은 문장이라도, 화석·연대·기원·진화·창조·성경·인류·생명·우주 등
+  서비스 범위와 관련된 개념이 포함되어 있으면 true로 판단한다.
+- 판단이 애매하거나 확신이 서지 않으면 항상 true를 선택한다.
+  (이 필터의 목적은 명백한 잡담/스팸만 걸러내는 것이지, 창조과학 관련 질문을
+   조금이라도 걸러내는 것이 아니다.)
+ 
+[질문]
+{question}
+ 
+위 판정 원칙에 따라 true 또는 false만 출력하라. 다른 설명은 절대 추가하지 마라."""
+
+
 def is_creation_question(question: str) -> bool:
     # LangGraph 밖에서 호출되는 단발성 게이트라 별도 span으로 감싸지 않고,
     # chat.completions.create()에 name만 지정해 자동 생성되는 generation을 그대로 사용
@@ -135,23 +172,7 @@ def is_creation_question(question: str) -> bool:
         messages=[
             {
                 "role": "user",
-                "content": f"""
-다음 질문이 아래 중 하나라도 관련되면 true:
-
-- 성경
-- 창조
-- 진화
-- 생물 기원
-- 노아의 홍수
-(창조설계, 대홍수, 화석, 진화론, 기독교, 창조신앙, 천문학, 연대문제 등과 관련된 질문도 포함)
-
-조금이라도 관련 있으면 true로 판단해.
-
-질문:
-{question}
-
-true 또는 false만 출력.
-"""
+                "content": CREATION_TOPIC_CLASSIFIER_PROMPT.format(question=question)
             }
         ],
         temperature=0,
@@ -160,7 +181,16 @@ true 또는 false만 출력.
     )
 
     answer = extract_final_answer(res.choices[0].message)
-    return "true" in answer.lower()
+    # 기본값을 true 쪽에 둔다: 모델이 형식을 어기거나 애매하게 답해도
+    # "false"라는 명시적 문자열이 없는 한 통과시킨다.
+    is_related = "false" not in answer.lower()
+ 
+    logger.debug(
+        "[Topic Filter] question=%s | raw_answer=%s | is_related=%s",
+        question[:80], answer.strip(), is_related,
+    )
+ 
+    return is_related
 
 # ==================== Parallel Retrieval ====================
 def deduplicate_docs(docs: list[dict]) -> list[dict]:
@@ -547,6 +577,15 @@ FALLBACK_MESSAGE = (
     "질문을 조금 더 구체적으로 작성해 주시면 더 정확한 답변을 드릴 수 있습니다."
 )
 
+# ==================== Off-topic Message ====================
+# is_creation_question()이 서비스 범위와 명백히 무관하다고 판단했을 때 반환하는 안내 메시지.
+# generate()/generate_stream() 진입부(그래프 실행 전)에서 사용된다.
+OFF_TOPIC_MESSAGE = (
+    "죄송합니다. 이 챗봇은 성경적 창조론 및 관련 신앙/과학 주제(창조와 진화, "
+    "성경의 역사성, 생명과 우주의 기원 등)를 다루고 있습니다. "
+    "관련된 질문을 해주시면 답변드리겠습니다."
+)
+
 
 def fallback_node(state: GraphState) -> GraphState:
     """judge_stage1/2가 재시도 소진 후에도 실패했을 때 LLM 호출 없이 즉시 반환할 메시지."""
@@ -755,9 +794,14 @@ def generate(
     if not safe:
        logger.warning("[Blocked] reason=%s | question=%s", reason, question[:200])
        return "죄송합니다. 해당 요청은 처리할 수 없습니다.", {}
-
-    # if not is_creation_question(question):
-    #     return "창조과학 질문만 처리합니다.", {}
+ 
+    if not is_creation_question(question):
+        logger.info("[Off-topic] question=%s", question[:200])
+        langfuse.update_current_span(
+            output=OFF_TOPIC_MESSAGE,
+            metadata={"judgement": "off_topic"},
+        )
+        return OFF_TOPIC_MESSAGE, {}
 
     normalized_question = normalize_query(question)
 
@@ -885,11 +929,16 @@ def generate_stream(
        yield "data: 죄송합니다. 해당 요청은 처리할 수 없습니다.\n\n"
        yield "data: [DONE]\n\n"
        return
-
-    # if not is_creation_question(question):
-    #     yield "data: 창조과학 질문만 처리합니다.\n\n"
-    #     yield "data: [DONE]\n\n"
-    #     return
+ 
+    if not is_creation_question(question):
+        logger.info("[Off-topic-Stream] question=%s", question[:200])
+        yield f"data: {OFF_TOPIC_MESSAGE}\n\n"
+        yield "data: [DONE]\n\n"
+        langfuse.update_current_span(
+            output=OFF_TOPIC_MESSAGE,
+            metadata={"judgement": "off_topic"},
+        )
+        return
 
     normalized_question = normalize_query(question)
 
