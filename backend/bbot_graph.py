@@ -127,43 +127,6 @@ def normalize_query(query: str) -> str:
     return query
 
 # ==================== Question Filter ====================
-# 판정 원칙: 기본값은 "통과(true)". 서비스 범위와 "명백히 무관한" 질문만 false로 차단한다.
-# (이전 버전은 좁은 키워드 목록에 안 걸리면 false로 판정해 정상 질문을 자주 차단하는
-#  문제가 있었음 — 판정 기준 자체를 "관련 있으면 true"에서 "명백히 무관하면 false"로 반전)
-CREATION_TOPIC_CLASSIFIER_PROMPT = """당신은 '성경적 창조론 챗봇'의 질문 필터입니다.
-이 챗봇의 서비스 범위는 다음과 같습니다.
- 
-[서비스 범위 — 아래 중 하나라도 해당하면 관련 있음]
-1. 창조론 vs 진화론 (창조설계, 지적설계, 자연선택, 공통조상, 자연주의 등)
-2. 성경의 역사성 (창세기, 노아의 홍수, 방주, 족장 연대, 바벨탑, 출애굽 등)
-3. 지구/우주의 기원과 나이 (지질연대, 방사성동위원소 연대측정, 빅뱅, 우주론, 천문학)
-4. 생명의 기원과 다양성 (화석 기록, 캄브리아기 폭발, 종 분화, 유전학적 다양성, DNA 정보성, 자연선택/돌연변이의 한계)
-5. 인류의 기원 (고인류학, 아담과 하와, 인종 기원, 네안데르탈인 등)
-6. 신앙과 과학의 관계 일반 (신학적 관점에서의 과학 이슈, 기독교 세계관, 성경무오성)
-7. 위 주제들과 자연스럽게 연결되는 후속·파생 질문
-   (예: "그럼 공룡은 왜 멸종했나요?", "핀치새 부리는 왜 그런가요?", "빙하기는 성경적으로 어떻게 설명하나요?" 등
-    — 대화 맥락상 창조과학 주제의 하위 질문이거나, 창조과학 담론에서 흔히 다뤄지는 소재)
- 
-[판정 원칙 — 반드시 지킬 것]
-- 기본값은 "관련 있음(true)"이다. 질문이 위 범위와 조금이라도 연결될 가능성이 있으면 true로 판단한다.
-- false는 아래처럼 서비스 범위와 "명백히, 확실하게" 무관한 질문에만 사용한다:
-  · 순수 일상/시사 (오늘 날씨, 스포츠 경기 결과, 연예 뉴스, 정치 이슈 등)
-  · 순수 기술/생활 정보 (프로그래밍 코드 작성, 요리 레시피, 여행 일정, 쇼핑 추천 등)
-  · 창조과학 맥락이 전혀 없는 순수 수학/물리 계산 문제
-  · 챗봇 사용법이나 시스템 오류 문의 등 서비스 운영 관련 질문
-  · 위 서비스 범위 어떤 항목과도 개념적 연결고리를 찾을 수 없는 질문
-- 질문이 한 단어나 짧은 문장이라도, 화석·연대·기원·진화·창조·성경·인류·생명·우주 등
-  서비스 범위와 관련된 개념이 포함되어 있으면 true로 판단한다.
-- 판단이 애매하거나 확신이 서지 않으면 항상 true를 선택한다.
-  (이 필터의 목적은 명백한 잡담/스팸만 걸러내는 것이지, 창조과학 관련 질문을
-   조금이라도 걸러내는 것이 아니다.)
- 
-[질문]
-{question}
- 
-위 판정 원칙에 따라 true 또는 false만 출력하라. 다른 설명은 절대 추가하지 마라."""
-
-
 def is_creation_question(question: str) -> bool:
     # LangGraph 밖에서 호출되는 단발성 게이트라 별도 span으로 감싸지 않고,
     # chat.completions.create()에 name만 지정해 자동 생성되는 generation을 그대로 사용
@@ -172,7 +135,23 @@ def is_creation_question(question: str) -> bool:
         messages=[
             {
                 "role": "user",
-                "content": CREATION_TOPIC_CLASSIFIER_PROMPT.format(question=question)
+                "content": f"""
+다음 질문이 아래 중 하나라도 관련되면 true:
+
+- 성경
+- 창조
+- 진화
+- 생물 기원
+- 노아의 홍수
+(창조설계, 대홍수, 화석, 진화론, 기독교, 창조신앙, 천문학, 연대문제 등과 관련된 질문도 포함)
+
+조금이라도 관련 있으면 true로 판단해.
+
+질문:
+{question}
+
+true 또는 false만 출력.
+"""
             }
         ],
         temperature=0,
@@ -181,16 +160,88 @@ def is_creation_question(question: str) -> bool:
     )
 
     answer = extract_final_answer(res.choices[0].message)
-    # 기본값을 true 쪽에 둔다: 모델이 형식을 어기거나 애매하게 답해도
-    # "false"라는 명시적 문자열이 없는 한 통과시킨다.
-    is_related = "false" not in answer.lower()
- 
-    logger.debug(
-        "[Topic Filter] question=%s | raw_answer=%s | is_related=%s",
-        question[:80], answer.strip(), is_related,
-    )
- 
-    return is_related
+    return "true" in answer.lower()
+
+
+# ==================== Off-topic 경량 필터 ====================
+# "명백히 무관"한 질문만 그래프 진입 전에 즉시 차단.
+# 애매한 경계 질문(핀치새 부리, 화석 연대 등)은 절대 여기서 거르지 않고
+# judge_stage1 / judge_stage2 (검색 결과 기반 판정) 로 넘긴다.
+# ⚠️ 키워드/패턴은 확정값이 아님 — 실제 서비스 로그 보면서 튜닝 필요.
+
+OFFTOPIC_MESSAGE = "창조과학/성경 관련 질문에 답변하는 챗봇입니다. 관련된 질문을 해주세요."
+
+# 이 중 하나라도 포함되면 아래 off-topic 패턴에 걸려도 무조건 통과(차단 안 함).
+_DOMAIN_OVERRIDE_KEYWORDS = [
+    "성경", "창조", "진화", "화석", "공룡", "노아", "홍수", "방주",
+    "하나님", "여호와", "예수", "천지창조", "창세기", "에덴", "아담", "이브",
+    "빅뱅", "우주", "지구 나이", "지구나이", "연대측정", "연대 측정",
+    "인류 기원", "인류기원", "생명 기원", "생명기원", "다윈", "자연선택", "자연 선택",
+    "돌연변이", "캄브리아", "대격변", "지층", "화석기록", "화석 기록",
+    "천문학", "지질학", "고생물학", "dna", "유전자", "지적설계", "지적 설계",
+    "간극이론", "갭이론", "창조과학", "창조론", "구속사",
+]
+
+_OFFTOPIC_PATTERNS: dict[str, list[re.Pattern]] = {
+    # 인사말/잡담: 문장 전체가 이것만 있을 때만 차단 (부분 매칭 X)
+    "greeting": [
+        re.compile(r"^(안녕|안녕하세요|하이|hi|hello|hey|반가워요?|ㅎㅇ|굿모닝|좋은\s?아침)\s*[!~.,]*\s*$", re.IGNORECASE),
+        re.compile(r"^(뭐\s?해|심심해|잘\s?지내\??|고마워|고맙습니다|수고했어)\s*[!~.,?]*\s*$"),
+    ],
+    "weather": [
+        re.compile(r"(오늘|내일|이번\s?주)?\s?날씨"),
+        re.compile(r"미세먼지|우산\s?챙겨"),
+    ],
+    "coding": [
+        re.compile(r"파이썬|자바스크립트|javascript|typescript|\bjava\b|c\+\+|c#", re.IGNORECASE),
+        re.compile(r"코딩|프로그래밍|디버깅|리눅스\s?명령어|docker|git\s?사용법|sql\s?쿼리|정규식", re.IGNORECASE),
+        re.compile(r"코드\s?(짜|작성|만들어)\s?줘"),
+    ],
+    "math_homework": [
+        re.compile(r"미적분|방정식\s?풀이|인수분해|확률\s?문제|통계\s?문제|수학\s?문제\s?풀어"),
+    ],
+    "cooking": [
+        re.compile(r"레시피|요리\s?법|맛있게\s?만드는\s?법"),
+    ],
+    "travel": [
+        re.compile(r"여행지\s?추천|여행\s?코스|맛집\s?추천|항공권"),
+    ],
+    "sports": [
+        re.compile(r"축구\s?경기\s?결과|야구\s?스코어|프로야구\s?순위|월드컵\s?일정|nba\s?결과", re.IGNORECASE),
+    ],
+    "finance": [
+        re.compile(r"주식\s?추천|부동산\s?시세|코인\s?시세|환율\s?알려"),
+    ],
+    "entertainment": [
+        re.compile(r"드라마\s?추천|영화\s?추천|아이돌\s?컴백|연예인\s?소식"),
+    ],
+    "shopping": [
+        re.compile(r"최저가|쇼핑몰\s?추천|상품\s?추천해"),
+    ],
+}
+
+
+def classify_offtopic(question: str) -> str | None:
+    """디버깅/로그용: 어떤 카테고리에 걸렸는지 반환. 안 걸리면 None."""
+    q = question.strip()
+    if not q:
+        return None
+
+    # 도메인 보호 키워드 있으면 무조건 통과
+    if any(kw in q for kw in _DOMAIN_OVERRIDE_KEYWORDS):
+        return None
+
+    for category, patterns in _OFFTOPIC_PATTERNS.items():
+        for pattern in patterns:
+            if pattern.search(q):
+                return category
+
+    return None
+
+
+def is_obviously_offtopic(question: str) -> bool:
+    """True면 명백히 무관 → 그래프 진입 전 즉시 차단."""
+    return classify_offtopic(question) is not None
 
 # ==================== Parallel Retrieval ====================
 def deduplicate_docs(docs: list[dict]) -> list[dict]:
@@ -382,7 +433,20 @@ def rewrite_question(state: GraphState) -> GraphState:
     logger.info("[Rewrite]")
 
     question = state["question"]
+    previous_rewrite = state.get("rewritten_question") or ""
     iteration = state.get("iteration", 0)
+
+    # 직전 rewrite 결과가 있으면(2회차 이상) 그걸 기반으로 개선,
+    # 없으면(1회차) 원본만 보고 작성 — 두 경우를 human 메시지에서 명시적으로 구분해준다.
+    if previous_rewrite:
+        human_content = (
+            f"Original question: {question}\n"
+            f"Previous rewrite (검색 결과가 부족했던 이전 재작성 결과): {previous_rewrite}\n\n"
+            "위 재작성이 왜 검색에 실패했을지 고려해서, 다른 키워드/다른 각도로 더 개선된 검색 쿼리를 작성하세요. "
+            "이전 재작성과 거의 동일한 문장을 반복하지 마세요."
+        )
+    else:
+        human_content = f"Original question: {question}"
 
     prompt_rewriter = ChatPromptTemplate.from_messages([
         (
@@ -392,11 +456,12 @@ def rewrite_question(state: GraphState) -> GraphState:
             "1. 반드시 재작성된 검색 쿼리 '한 문장만' 출력하세요. 설명, 되묻기, 여러 개의 후보, 마크다운 강조(**) 등은 절대 포함하지 마세요.\n"
             "2. 원 질문이 모호하거나 일반적인 단어(예: '배', '크기', '나이')를 포함하면, 이 챗봇의 도메인(창조과학, 성경, 노아의 방주, 창조/진화 논쟁, 화석, 연대문제 등)에 맞춰 가장 그럴듯한 의미로 구체화하세요. "
             "예: '배의 크기가 궁금해' → '노아의 방주 크기와 규모'\n"
-            "3. 사용자에게 되묻거나 여러 선택지를 제시하지 말고, 검색에 바로 쓸 수 있는 하나의 명확한 쿼리로 확정해서 출력하세요."
+            "3. 사용자에게 되묻거나 여러 선택지를 제시하지 말고, 검색에 바로 쓸 수 있는 하나의 명확한 쿼리로 확정해서 출력하세요.\n"
+            "4. 직전 재작성 결과가 함께 주어지면, 그 결과로도 검색이 실패했다는 뜻이므로 동일한 표현을 반복하지 말고 다른 키워드나 다른 관점으로 시도하세요."
         ),
         (
             "human",
-            f"Original question: {question}"
+            human_content
         )
     ])
 
@@ -422,10 +487,10 @@ def rewrite_question(state: GraphState) -> GraphState:
         "question": question
     })
 
-    logger.debug("[Rewrite] Rewritten question: %s", rewritten)
+    logger.debug("[Rewrite] Rewritten question: %s (previous=%s)", rewritten, previous_rewrite or "(없음)")
 
     get_langfuse_client().update_current_span(
-        input={"question": question, "iteration": iteration},
+        input={"question": question, "previous_rewrite": previous_rewrite, "iteration": iteration},
         output={"rewritten_question": rewritten},
     )
 
@@ -434,6 +499,7 @@ def rewrite_question(state: GraphState) -> GraphState:
         "rewritten_question": rewritten,
         "iteration": iteration + 1
     }
+
 
 # ==================== Conditional Edges ====================
 # 재시도 카운터(iteration)는 stage1/stage2가 공유한다 — 전체 그래프 실행에서
@@ -575,15 +641,6 @@ def rerank_node(state: GraphState) -> GraphState:
 FALLBACK_MESSAGE = (
     "제공된 자료만으로는 충분히 신뢰할 수 있는 답변을 드리기 어렵습니다. "
     "질문을 조금 더 구체적으로 작성해 주시면 더 정확한 답변을 드릴 수 있습니다."
-)
-
-# ==================== Off-topic Message ====================
-# is_creation_question()이 서비스 범위와 명백히 무관하다고 판단했을 때 반환하는 안내 메시지.
-# generate()/generate_stream() 진입부(그래프 실행 전)에서 사용된다.
-OFF_TOPIC_MESSAGE = (
-    "죄송합니다. 이 챗봇은 성경적 창조론 및 관련 신앙/과학 주제(창조와 진화, "
-    "성경의 역사성, 생명과 우주의 기원 등)를 다루고 있습니다. "
-    "관련된 질문을 해주시면 답변드리겠습니다."
 )
 
 
@@ -794,14 +851,14 @@ def generate(
     if not safe:
        logger.warning("[Blocked] reason=%s | question=%s", reason, question[:200])
        return "죄송합니다. 해당 요청은 처리할 수 없습니다.", {}
- 
-    if not is_creation_question(question):
-        logger.info("[Off-topic] question=%s", question[:200])
+
+    if is_obviously_offtopic(question):
+        logger.info("[Offtopic] question=%s", question[:200])
         langfuse.update_current_span(
-            output=OFF_TOPIC_MESSAGE,
-            metadata={"judgement": "off_topic"},
+            output=OFFTOPIC_MESSAGE,
+            metadata={"offtopic": True},
         )
-        return OFF_TOPIC_MESSAGE, {}
+        return OFFTOPIC_MESSAGE, {}
 
     normalized_question = normalize_query(question)
 
@@ -929,14 +986,14 @@ def generate_stream(
        yield "data: 죄송합니다. 해당 요청은 처리할 수 없습니다.\n\n"
        yield "data: [DONE]\n\n"
        return
- 
-    if not is_creation_question(question):
-        logger.info("[Off-topic-Stream] question=%s", question[:200])
-        yield f"data: {OFF_TOPIC_MESSAGE}\n\n"
+
+    if is_obviously_offtopic(question):
+        logger.info("[Offtopic-Stream] question=%s", question[:200])
+        yield f"data: {OFFTOPIC_MESSAGE}\n\n"
         yield "data: [DONE]\n\n"
         langfuse.update_current_span(
-            output=OFF_TOPIC_MESSAGE,
-            metadata={"judgement": "off_topic"},
+            output=OFFTOPIC_MESSAGE,
+            metadata={"offtopic": True},
         )
         return
 
