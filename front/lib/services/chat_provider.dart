@@ -75,6 +75,16 @@ class ChatProvider extends ChangeNotifier {
             notifyListeners();
           }
         },
+        onSources: (sources) {
+          final idx = _messages.indexWhere((m) => m.id == botMsgId);
+          if (idx != -1) {
+            _messages[idx] = _messages[idx].copyWith(
+              sources:   sources,
+              isLoading: false,
+            );
+            notifyListeners();
+          }
+        },
       );
 
       if (result.sessionId != null) _activeSessionId = result.sessionId;

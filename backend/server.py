@@ -227,23 +227,30 @@ async def chat_stream(
                 except Exception:
                     pass
             elif chunk.startswith("data: [DONE]"):
-                try:
-                    session_id = save_chat_message(
-                        user_id    = user["user_id"],
-                        question   = req.question.strip(),
-                        answer     = full_answer,
-                        sources    = sources_raw,
-                        session_id = req.session_id,
-                    )
-                    yield f"data: [SESSION]{session_id}\n\n"
-                except Exception as e:
-                    logger.warning("채팅 기록 저장 실패: %s", e)
+                # [SOURCES]는 [DONE] 뒤에 오므로, 저장은 스트림 종료 후로 미룸
+                pass
             else:
                 token = chunk.replace("data: ", "").replace("\n\n", "")
                 full_answer += token.replace("\\n", "\n")
 
             yield chunk
             await asyncio.sleep(0)
+
+        # 모든 청크 수신 완료 → 출처까지 포함해 저장
+        # save_chat_message는 동기 DB I/O이므로 to_thread로 빼야
+        # 이벤트 루프가 블로킹되지 않음
+        try:
+            session_id = await asyncio.to_thread(
+                save_chat_message,
+                user["user_id"],
+                req.question.strip(),
+                full_answer,
+                sources_raw,
+                req.session_id,
+            )
+            yield f"data: [SESSION]{session_id}\n\n"
+        except Exception as e:
+            logger.warning("채팅 기록 저장 실패: %s", e)
 
     return StreamingResponse(
         event_generator(),
