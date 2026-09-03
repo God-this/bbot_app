@@ -986,9 +986,15 @@ def generate_stream(
         "top_sources": reranked_docs,
     }
 
-    # ---------- 캐시 저장 ----------
-    persist_answer_cache(use_cache, normalized_question, question, full_answer, sources)
-    # -------------------------------
-
+    # 출처는 이미 확정된 상태이므로 먼저 내보내 UI가 즉시 렌더링하게 함.
+    # save_answer_cache는 임베딩 API 호출(수 초)을 포함하므로 뒤로 미룬다.
     yield "data: [DONE]\n\n"
     yield f"data: [SOURCES]{json.dumps(sources, ensure_ascii=False)}\n\n"
+
+    # ---------- 캐시 저장 ----------
+    if use_cache:
+        try:
+            save_answer_cache(normalized_question, question, {"answer": full_answer, "sources": sources})
+            logger.debug("캐시 저장 완료 — question: %s", question)
+        except Exception as e:
+            logger.error("캐시 저장 실패: %s", e, exc_info=True)
