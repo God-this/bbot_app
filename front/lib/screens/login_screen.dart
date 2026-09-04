@@ -27,18 +27,18 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  Future<void> _handleGuestContinue() async {
-    setState(() { _loading = true; _error = null; });
-    try {
-      await context.read<AuthProvider>().continueAsGuest();
-    } catch (e) {
-      if (mounted) {
-        setState(() => _error = e.toString());
-      }
-    } finally {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
+  // Future<void> _handleGuestContinue() async {
+  //   setState(() { _loading = true; _error = null; });
+  //   try {
+  //     await context.read<AuthProvider>().continueAsGuest();
+  //   } catch (e) {
+  //     if (mounted) {
+  //       setState(() => _error = e.toString());
+  //     }
+  //   } finally {
+  //     if (mounted) setState(() => _loading = false);
+  //   }
+  // }
 
   @override
   Widget build(BuildContext context) {
@@ -103,18 +103,18 @@ class _LoginScreenState extends State<LoginScreen> {
                     : Column(
                         children: [
                           _GoogleSignInButton(onTap: _handleGoogleSignIn),
-                          const SizedBox(height: 12),
-                          TextButton(
-                            onPressed: _handleGuestContinue,
-                            child: Text(
-                              '로그인 없이 질문하기',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: AppColors.textSecondary,
-                                decoration: TextDecoration.underline,
-                              ),
-                            ),
-                          ),
+                          // const SizedBox(height: 12),
+                          // TextButton(
+                          //   onPressed: _handleGuestContinue,
+                          //   child: Text(
+                          //     '로그인 없이 질문하기',
+                          //     style: TextStyle(
+                          //       fontSize: 14,
+                          //       color: AppColors.textSecondary,
+                          //       decoration: TextDecoration.underline,
+                          //     ),
+                          //   ),
+                          // ),
                         ],
                       ),
 
