@@ -126,41 +126,6 @@ def normalize_query(query: str) -> str:
     query = re.sub(r"\s+", " ", query)
     return query
 
-# ==================== Question Filter ====================
-def is_creation_question(question: str) -> bool:
-    # LangGraph 밖에서 호출되는 단발성 게이트라 별도 span으로 감싸지 않고,
-    # chat.completions.create()에 name만 지정해 자동 생성되는 generation을 그대로 사용
-    res = client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": f"""
-다음 질문이 아래 중 하나라도 관련되면 true:
-
-- 성경
-- 창조
-- 진화
-- 생물 기원
-- 노아의 홍수
-(창조설계, 대홍수, 화석, 진화론, 기독교, 창조신앙, 천문학, 연대문제 등과 관련된 질문도 포함)
-
-조금이라도 관련 있으면 true로 판단해.
-
-질문:
-{question}
-
-true 또는 false만 출력.
-"""
-            }
-        ],
-        temperature=0,
-        name="classify-creation-question",
-        **reasoning_kwargs(),
-    )
-
-    answer = extract_final_answer(res.choices[0].message)
-    return "true" in answer.lower()
 
 # ==================== Parallel Retrieval ====================
 def deduplicate_docs(docs: list[dict]) -> list[dict]:
@@ -756,9 +721,6 @@ def generate(
        logger.warning("[Blocked] reason=%s | question=%s", reason, question[:200])
        return "죄송합니다. 해당 요청은 처리할 수 없습니다.", {}
 
-    # if not is_creation_question(question):
-    #     return "창조과학 질문만 처리합니다.", {}
-
     normalized_question = normalize_query(question)
 
     logger.debug("[Normalized Query]: %s", normalized_question)
@@ -885,11 +847,6 @@ def generate_stream(
        yield "data: 죄송합니다. 해당 요청은 처리할 수 없습니다.\n\n"
        yield "data: [DONE]\n\n"
        return
-
-    # if not is_creation_question(question):
-    #     yield "data: 창조과학 질문만 처리합니다.\n\n"
-    #     yield "data: [DONE]\n\n"
-    #     return
 
     normalized_question = normalize_query(question)
 
