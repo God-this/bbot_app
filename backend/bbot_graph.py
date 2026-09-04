@@ -127,6 +127,36 @@ def normalize_query(query: str) -> str:
     return query
 
 
+# ==================== 차단 안내 문구 ====================
+# is_safe_input()이 돌려주는 reason은 "<종류>:<상세>" 형태.
+# 상세 사유는 LLM 생성 문장이라 그대로 노출하지 않고(어투/언어가 불규칙),
+# 종류별로 미리 준비한 안내 문구만 사용자에게 보여준다. 원문은 로그에 남는다.
+# 문구는 프론트엔드(MarkdownBody)에서 마크다운으로 렌더링되므로,
+# 줄을 나눌 때는 단일 개행이 아니라 빈 줄("\n\n")로 문단을 분리해야 한다.
+_BLOCK_MESSAGES = {
+    "off_topic": (
+        "죄송합니다. 이 챗봇은 성경적 창조론과 창조과학에 관한 질문에만 답변드릴 수 있어요.\n\n"
+        "예를 들어 '노아의 방주는 얼마나 컸나요?', '공룡 화석의 연대는 어떻게 보나요?' 처럼 "
+        "창조·성경과 관련지어 다시 질문해 주시겠어요?"
+    ),
+    "jailbreak": (
+        "죄송합니다. 챗봇의 답변 규칙을 변경하려는 요청은 처리할 수 없어요.\n\n"
+        "궁금하신 창조과학 주제를 질문으로 남겨주시면 성실히 답변드리겠습니다."
+    ),
+    "moderation": (
+        "죄송합니다. 해당 요청은 답변드리기 어려운 내용을 포함하고 있어요.\n\n"
+        "창조과학이나 성경에 관해 궁금한 점을 질문해 주시겠어요?"
+    ),
+}
+
+_BLOCK_MESSAGE_DEFAULT = "죄송합니다. 해당 요청은 처리할 수 없습니다."
+
+
+def get_block_message(reason: str) -> str:
+    """차단 사유(reason)에 맞는 사용자 안내 문구를 반환."""
+    kind = reason.split(":", 1)[0]
+    return _BLOCK_MESSAGES.get(kind, _BLOCK_MESSAGE_DEFAULT)
+
 # ==================== Parallel Retrieval ====================
 def deduplicate_docs(docs: list[dict]) -> list[dict]:
     seen = set()
@@ -696,7 +726,7 @@ def generate(
     safe, reason = is_safe_input(question)
     if not safe:
        logger.warning("[Blocked] reason=%s | question=%s", reason, question[:200])
-       return "죄송합니다. 해당 요청은 처리할 수 없습니다.", {}
+       return get_block_message(reason), {}
 
     normalized_question = normalize_query(question)
 
@@ -821,7 +851,10 @@ def generate_stream(
     safe, reason = is_safe_input(question)
     if not safe:
        logger.warning("[Blocked-Stream] reason=%s | question=%s", reason, question[:200])
-       yield "data: 죄송합니다. 해당 요청은 처리할 수 없습니다.\n\n"
+       # 개행은 다른 스트림 구간과 동일하게 리터럴 "\\n"로 이스케이프해 전달
+       # (프론트엔드가 replaceAll('\\n', '\n')로 복원)
+       blocked = get_block_message(reason).replace("\n", "\\n")
+       yield f"data: {blocked}\n\n"
        yield "data: [DONE]\n\n"
        return
 
