@@ -23,7 +23,7 @@ from bbot_web import retrieve_web_documents
 from bbot_book import retrieve_pages
 from bbot_video import retrieve_video_segments
 from utils import detect_language, translate_to_english, extract_final_answer, reasoning_kwargs
-from moderation import is_safe_input
+from moderation import is_safe_input, check_document_sufficiency
 
 import re
 
@@ -260,10 +260,11 @@ def judge_stage1(state: GraphState) -> GraphState:
     }
 
 
-# judge_stage2: rerank 결과를 LLM에게 배치로 보여주고 관련도를 판정.
-# "관대한 기본값 + 명백한 이탈만 차단" 원칙의 placeholder 프롬프트 — 실측 후 문구 조정.
+# judge_stage2: rerank 결과가 질문에 답하기 충분한지를 구조화된 출력으로 판정.
+# "문서 존재 여부"가 아니라 "문서 충분성"을 보므로 not_resolved(→rewrite) 비율이
+# 이전보다 높아질 수 있다. rewrite는 iteration < 2로 제한되어 무한 루프는 없음.
 def judge_stage2(state: GraphState) -> GraphState:
-    """reranked_documents를 대상으로 배치 LLM 콜 1회로 최종 관련도 판정."""
+    """reranked_documents를 대상으로 LLM 콜 1회로 문서 충분성을 판정."""
     logger.debug("[Judge Stage2]")
 
     docs = state.get("reranked_documents", [])
@@ -271,44 +272,20 @@ def judge_stage2(state: GraphState) -> GraphState:
 
     if not docs:
         logger.warning("[Judge Stage2] reranked_documents 없음 → not_resolved")
-        get_langfuse_client().update_current_span(
-            input={"document_count": 0},
-            output={"judgement": "not_resolved"},
+        judgement = "not_resolved"
+        sufficient, confidence, reason = False, 0.0, "no_documents"
+    else:
+        # 텍스트 파싱("true" in answer) 대신 JSON Schema를 강제한 구조화된 출력으로 판정
+        sufficient, confidence, reason = check_document_sufficiency(question, docs)
+        judgement = "resolved" if sufficient else "not_resolved"
+        logger.debug(
+            "[Judge Stage2] sufficient=%s confidence=%.2f reason=%s",
+            sufficient, confidence, reason,
         )
-        return {**state, "judgement": "not_resolved"}
-
-    summary = "\n".join(
-        f"[{i+1}] {d.get('title', d.get('book', ''))}: {d.get('content', '')[:150]}"
-        for i, d in enumerate(docs)
-    )
-
-    res = client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=[{
-            "role": "user",
-            "content": f"""아래 문서들이 질문에 답하기에 명백히 무관한 경우에만 false,
-그 외에는 모두 true를 출력하세요.
-
-질문: {question}
-
-문서:
-{summary}
-
-true 또는 false만 출력.""",
-        }],
-        temperature=0,
-        name="judge-stage2-relevance",
-        **reasoning_kwargs(),
-    )
-
-    answer = extract_final_answer(res.choices[0].message)
-    judgement = "resolved" if "false" not in answer.lower() else "not_resolved"
-
-    logger.debug("[Judge Stage2] LLM 판정: %s → %s", answer.strip(), judgement)
 
     get_langfuse_client().update_current_span(
         input={"question": question, "document_count": len(docs)},
-        output={"judgement": judgement, "raw_answer": answer},
+        output={"judgement": judgement, "confidence": confidence, "reason": reason},
     )
 
     return {**state, "judgement": judgement}
