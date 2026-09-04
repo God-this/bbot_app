@@ -23,7 +23,7 @@ from bbot_web import retrieve_web_documents
 from bbot_book import retrieve_pages
 from bbot_video import retrieve_video_segments
 from utils import detect_language, translate_to_english, extract_final_answer, reasoning_kwargs
-from moderation import is_safe_input
+from moderation import is_safe_input, check_document_sufficiency
 
 import re
 
@@ -126,41 +126,36 @@ def normalize_query(query: str) -> str:
     query = re.sub(r"\s+", " ", query)
     return query
 
-# ==================== Question Filter ====================
-def is_creation_question(question: str) -> bool:
-    # LangGraph 밖에서 호출되는 단발성 게이트라 별도 span으로 감싸지 않고,
-    # chat.completions.create()에 name만 지정해 자동 생성되는 generation을 그대로 사용
-    res = client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": f"""
-다음 질문이 아래 중 하나라도 관련되면 true:
 
-- 성경
-- 창조
-- 진화
-- 생물 기원
-- 노아의 홍수
-(창조설계, 대홍수, 화석, 진화론, 기독교, 창조신앙, 천문학, 연대문제 등과 관련된 질문도 포함)
+# ==================== 차단 안내 문구 ====================
+# is_safe_input()이 돌려주는 reason은 "<종류>:<상세>" 형태.
+# 상세 사유는 LLM 생성 문장이라 그대로 노출하지 않고(어투/언어가 불규칙),
+# 종류별로 미리 준비한 안내 문구만 사용자에게 보여준다. 원문은 로그에 남는다.
+# 문구는 프론트엔드(MarkdownBody)에서 마크다운으로 렌더링되므로,
+# 줄을 나눌 때는 단일 개행이 아니라 빈 줄("\n\n")로 문단을 분리해야 한다.
+_BLOCK_MESSAGES = {
+    "off_topic": (
+        "죄송합니다. 이 챗봇은 성경적 창조론과 창조과학에 관한 질문에만 답변드릴 수 있어요.\n\n"
+        "예를 들어 '노아의 방주는 얼마나 컸나요?', '공룡 화석의 연대는 어떻게 보나요?' 처럼 "
+        "창조·성경과 관련지어 다시 질문해 주시겠어요?"
+    ),
+    "jailbreak": (
+        "죄송합니다. 챗봇의 답변 규칙을 변경하려는 요청은 처리할 수 없어요.\n\n"
+        "궁금하신 창조과학 주제를 질문으로 남겨주시면 성실히 답변드리겠습니다."
+    ),
+    "moderation": (
+        "죄송합니다. 해당 요청은 답변드리기 어려운 내용을 포함하고 있어요.\n\n"
+        "창조과학이나 성경에 관해 궁금한 점을 질문해 주시겠어요?"
+    ),
+}
 
-조금이라도 관련 있으면 true로 판단해.
+_BLOCK_MESSAGE_DEFAULT = "죄송합니다. 해당 요청은 처리할 수 없습니다."
 
-질문:
-{question}
 
-true 또는 false만 출력.
-"""
-            }
-        ],
-        temperature=0,
-        name="classify-creation-question",
-        **reasoning_kwargs(),
-    )
-
-    answer = extract_final_answer(res.choices[0].message)
-    return "true" in answer.lower()
+def get_block_message(reason: str) -> str:
+    """차단 사유(reason)에 맞는 사용자 안내 문구를 반환."""
+    kind = reason.split(":", 1)[0]
+    return _BLOCK_MESSAGES.get(kind, _BLOCK_MESSAGE_DEFAULT)
 
 # ==================== Parallel Retrieval ====================
 def deduplicate_docs(docs: list[dict]) -> list[dict]:
@@ -295,10 +290,11 @@ def judge_stage1(state: GraphState) -> GraphState:
     }
 
 
-# judge_stage2: rerank 결과를 LLM에게 배치로 보여주고 관련도를 판정.
-# "관대한 기본값 + 명백한 이탈만 차단" 원칙의 placeholder 프롬프트 — 실측 후 문구 조정.
+# judge_stage2: rerank 결과가 질문에 답하기 충분한지를 구조화된 출력으로 판정.
+# "문서 존재 여부"가 아니라 "문서 충분성"을 보므로 not_resolved(→rewrite) 비율이
+# 이전보다 높아질 수 있다. rewrite는 iteration < 2로 제한되어 무한 루프는 없음.
 def judge_stage2(state: GraphState) -> GraphState:
-    """reranked_documents를 대상으로 배치 LLM 콜 1회로 최종 관련도 판정."""
+    """reranked_documents를 대상으로 LLM 콜 1회로 문서 충분성을 판정."""
     logger.debug("[Judge Stage2]")
 
     docs = state.get("reranked_documents", [])
@@ -306,44 +302,20 @@ def judge_stage2(state: GraphState) -> GraphState:
 
     if not docs:
         logger.warning("[Judge Stage2] reranked_documents 없음 → not_resolved")
-        get_langfuse_client().update_current_span(
-            input={"document_count": 0},
-            output={"judgement": "not_resolved"},
+        judgement = "not_resolved"
+        sufficient, confidence, reason = False, 0.0, "no_documents"
+    else:
+        # 텍스트 파싱("true" in answer) 대신 JSON Schema를 강제한 구조화된 출력으로 판정
+        sufficient, confidence, reason = check_document_sufficiency(question, docs)
+        judgement = "resolved" if sufficient else "not_resolved"
+        logger.debug(
+            "[Judge Stage2] sufficient=%s confidence=%.2f reason=%s",
+            sufficient, confidence, reason,
         )
-        return {**state, "judgement": "not_resolved"}
-
-    summary = "\n".join(
-        f"[{i+1}] {d.get('title', d.get('book', ''))}: {d.get('content', '')[:150]}"
-        for i, d in enumerate(docs)
-    )
-
-    res = client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=[{
-            "role": "user",
-            "content": f"""아래 문서들이 질문에 답하기에 명백히 무관한 경우에만 false,
-그 외에는 모두 true를 출력하세요.
-
-질문: {question}
-
-문서:
-{summary}
-
-true 또는 false만 출력.""",
-        }],
-        temperature=0,
-        name="judge-stage2-relevance",
-        **reasoning_kwargs(),
-    )
-
-    answer = extract_final_answer(res.choices[0].message)
-    judgement = "resolved" if "false" not in answer.lower() else "not_resolved"
-
-    logger.debug("[Judge Stage2] LLM 판정: %s → %s", answer.strip(), judgement)
 
     get_langfuse_client().update_current_span(
         input={"question": question, "document_count": len(docs)},
-        output={"judgement": judgement, "raw_answer": answer},
+        output={"judgement": judgement, "confidence": confidence, "reason": reason},
     )
 
     return {**state, "judgement": judgement}
@@ -754,10 +726,7 @@ def generate(
     safe, reason = is_safe_input(question)
     if not safe:
        logger.warning("[Blocked] reason=%s | question=%s", reason, question[:200])
-       return "죄송합니다. 해당 요청은 처리할 수 없습니다.", {}
-
-    # if not is_creation_question(question):
-    #     return "창조과학 질문만 처리합니다.", {}
+       return get_block_message(reason), {}
 
     normalized_question = normalize_query(question)
 
@@ -882,14 +851,12 @@ def generate_stream(
     safe, reason = is_safe_input(question)
     if not safe:
        logger.warning("[Blocked-Stream] reason=%s | question=%s", reason, question[:200])
-       yield "data: 죄송합니다. 해당 요청은 처리할 수 없습니다.\n\n"
+       # 개행은 다른 스트림 구간과 동일하게 리터럴 "\\n"로 이스케이프해 전달
+       # (프론트엔드가 replaceAll('\\n', '\n')로 복원)
+       blocked = get_block_message(reason).replace("\n", "\\n")
+       yield f"data: {blocked}\n\n"
        yield "data: [DONE]\n\n"
        return
-
-    # if not is_creation_question(question):
-    #     yield "data: 창조과학 질문만 처리합니다.\n\n"
-    #     yield "data: [DONE]\n\n"
-    #     return
 
     normalized_question = normalize_query(question)
 
