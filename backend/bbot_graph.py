@@ -157,87 +157,6 @@ def get_block_message(reason: str) -> str:
     kind = reason.split(":", 1)[0]
     return _BLOCK_MESSAGES.get(kind, _BLOCK_MESSAGE_DEFAULT)
 
-
-# ==================== Off-topic 경량 필터 ====================
-# "명백히 무관"한 질문만 그래프 진입 전에 즉시 차단.
-# 애매한 경계 질문(핀치새 부리, 화석 연대 등)은 절대 여기서 거르지 않고
-# judge_stage1 / judge_stage2 (검색 결과 기반 판정) 로 넘긴다.
-# ⚠️ 키워드/패턴은 확정값이 아님 — 실제 서비스 로그 보면서 튜닝 필요.
-
-OFFTOPIC_MESSAGE = "창조과학/성경 관련 질문에 답변하는 챗봇입니다. 관련된 질문을 해주세요."
-
-# 이 중 하나라도 포함되면 아래 off-topic 패턴에 걸려도 무조건 통과(차단 안 함).
-_DOMAIN_OVERRIDE_KEYWORDS = [
-    "성경", "창조", "진화", "화석", "공룡", "노아", "홍수", "방주",
-    "하나님", "여호와", "예수", "천지창조", "창세기", "에덴", "아담", "이브",
-    "빅뱅", "우주", "지구 나이", "지구나이", "연대측정", "연대 측정",
-    "인류 기원", "인류기원", "생명 기원", "생명기원", "다윈", "자연선택", "자연 선택",
-    "돌연변이", "캄브리아", "대격변", "지층", "화석기록", "화석 기록",
-    "천문학", "지질학", "고생물학", "dna", "유전자", "지적설계", "지적 설계",
-    "간극이론", "갭이론", "창조과학", "창조론", "구속사",
-]
-
-_OFFTOPIC_PATTERNS: dict[str, list[re.Pattern]] = {
-    # 인사말/잡담: 문장 전체가 이것만 있을 때만 차단 (부분 매칭 X)
-    "greeting": [
-        re.compile(r"^(안녕|안녕하세요|하이|hi|hello|hey|반가워요?|ㅎㅇ|굿모닝|좋은\s?아침)\s*[!~.,]*\s*$", re.IGNORECASE),
-        re.compile(r"^(뭐\s?해|심심해|잘\s?지내\??|고마워|고맙습니다|수고했어)\s*[!~.,?]*\s*$"),
-    ],
-    "weather": [
-        re.compile(r"(오늘|내일|이번\s?주)?\s?날씨"),
-        re.compile(r"미세먼지|우산\s?챙겨"),
-    ],
-    "coding": [
-        re.compile(r"파이썬|자바스크립트|javascript|typescript|\bjava\b|c\+\+|c#", re.IGNORECASE),
-        re.compile(r"코딩|프로그래밍|디버깅|리눅스\s?명령어|docker|git\s?사용법|sql\s?쿼리|정규식", re.IGNORECASE),
-        re.compile(r"코드\s?(짜|작성|만들어)\s?줘"),
-    ],
-    "math_homework": [
-        re.compile(r"미적분|방정식\s?풀이|인수분해|확률\s?문제|통계\s?문제|수학\s?문제\s?풀어"),
-    ],
-    "cooking": [
-        re.compile(r"레시피|요리\s?법|맛있게\s?만드는\s?법"),
-    ],
-    "travel": [
-        re.compile(r"여행지\s?추천|여행\s?코스|맛집\s?추천|항공권"),
-    ],
-    "sports": [
-        re.compile(r"축구\s?경기\s?결과|야구\s?스코어|프로야구\s?순위|월드컵\s?일정|nba\s?결과", re.IGNORECASE),
-    ],
-    "finance": [
-        re.compile(r"주식\s?추천|부동산\s?시세|코인\s?시세|환율\s?알려"),
-    ],
-    "entertainment": [
-        re.compile(r"드라마\s?추천|영화\s?추천|아이돌\s?컴백|연예인\s?소식"),
-    ],
-    "shopping": [
-        re.compile(r"최저가|쇼핑몰\s?추천|상품\s?추천해"),
-    ],
-}
-
-
-def classify_offtopic(question: str) -> str | None:
-    """디버깅/로그용: 어떤 카테고리에 걸렸는지 반환. 안 걸리면 None."""
-    q = question.strip()
-    if not q:
-        return None
-
-    # 도메인 보호 키워드 있으면 무조건 통과
-    if any(kw in q for kw in _DOMAIN_OVERRIDE_KEYWORDS):
-        return None
-
-    for category, patterns in _OFFTOPIC_PATTERNS.items():
-        for pattern in patterns:
-            if pattern.search(q):
-                return category
-
-    return None
-
-
-def is_obviously_offtopic(question: str) -> bool:
-    """True면 명백히 무관 → 그래프 진입 전 즉시 차단."""
-    return classify_offtopic(question) is not None
-
 # ==================== Parallel Retrieval ====================
 def deduplicate_docs(docs: list[dict]) -> list[dict]:
     seen = set()
@@ -405,20 +324,7 @@ def rewrite_question(state: GraphState) -> GraphState:
     logger.info("[Rewrite]")
 
     question = state["question"]
-    previous_rewrite = state.get("rewritten_question") or ""
     iteration = state.get("iteration", 0)
-
-    # 직전 rewrite 결과가 있으면(2회차 이상) 그걸 기반으로 개선,
-    # 없으면(1회차) 원본만 보고 작성 — 두 경우를 human 메시지에서 명시적으로 구분해준다.
-    if previous_rewrite:
-        human_content = (
-            f"Original question: {question}\n"
-            f"Previous rewrite (검색 결과가 부족했던 이전 재작성 결과): {previous_rewrite}\n\n"
-            "위 재작성이 왜 검색에 실패했을지 고려해서, 다른 키워드/다른 각도로 더 개선된 검색 쿼리를 작성하세요. "
-            "이전 재작성과 거의 동일한 문장을 반복하지 마세요."
-        )
-    else:
-        human_content = f"Original question: {question}"
 
     prompt_rewriter = ChatPromptTemplate.from_messages([
         (
@@ -428,12 +334,11 @@ def rewrite_question(state: GraphState) -> GraphState:
             "1. 반드시 재작성된 검색 쿼리 '한 문장만' 출력하세요. 설명, 되묻기, 여러 개의 후보, 마크다운 강조(**) 등은 절대 포함하지 마세요.\n"
             "2. 원 질문이 모호하거나 일반적인 단어(예: '배', '크기', '나이')를 포함하면, 이 챗봇의 도메인(창조과학, 성경, 노아의 방주, 창조/진화 논쟁, 화석, 연대문제 등)에 맞춰 가장 그럴듯한 의미로 구체화하세요. "
             "예: '배의 크기가 궁금해' → '노아의 방주 크기와 규모'\n"
-            "3. 사용자에게 되묻거나 여러 선택지를 제시하지 말고, 검색에 바로 쓸 수 있는 하나의 명확한 쿼리로 확정해서 출력하세요.\n"
-            "4. 직전 재작성 결과가 함께 주어지면, 그 결과로도 검색이 실패했다는 뜻이므로 동일한 표현을 반복하지 말고 다른 키워드나 다른 관점으로 시도하세요."
+            "3. 사용자에게 되묻거나 여러 선택지를 제시하지 말고, 검색에 바로 쓸 수 있는 하나의 명확한 쿼리로 확정해서 출력하세요."
         ),
         (
             "human",
-            human_content
+            f"Original question: {question}"
         )
     ])
 
@@ -459,10 +364,10 @@ def rewrite_question(state: GraphState) -> GraphState:
         "question": question
     })
 
-    logger.debug("[Rewrite] Rewritten question: %s (previous=%s)", rewritten, previous_rewrite or "(없음)")
+    logger.debug("[Rewrite] Rewritten question: %s", rewritten)
 
     get_langfuse_client().update_current_span(
-        input={"question": question, "previous_rewrite": previous_rewrite, "iteration": iteration},
+        input={"question": question, "iteration": iteration},
         output={"rewritten_question": rewritten},
     )
 
@@ -471,7 +376,6 @@ def rewrite_question(state: GraphState) -> GraphState:
         "rewritten_question": rewritten,
         "iteration": iteration + 1
     }
-
 
 # ==================== Conditional Edges ====================
 # 재시도 카운터(iteration)는 stage1/stage2가 공유한다 — 전체 그래프 실행에서
@@ -824,14 +728,6 @@ def generate(
        logger.warning("[Blocked] reason=%s | question=%s", reason, question[:200])
        return get_block_message(reason), {}
 
-    if is_obviously_offtopic(question):
-        logger.info("[Offtopic] question=%s", question[:200])
-        langfuse.update_current_span(
-            output=OFFTOPIC_MESSAGE,
-            metadata={"offtopic": True},
-        )
-        return OFFTOPIC_MESSAGE, {}
-
     normalized_question = normalize_query(question)
 
     logger.debug("[Normalized Query]: %s", normalized_question)
@@ -962,16 +858,6 @@ def generate_stream(
        yield "data: [DONE]\n\n"
        return
 
-    if is_obviously_offtopic(question):
-        logger.info("[Offtopic-Stream] question=%s", question[:200])
-        yield f"data: {OFFTOPIC_MESSAGE}\n\n"
-        yield "data: [DONE]\n\n"
-        langfuse.update_current_span(
-            output=OFFTOPIC_MESSAGE,
-            metadata={"offtopic": True},
-        )
-        return
-
     normalized_question = normalize_query(question)
 
     # ---------- 캐시 조회 ----------
@@ -1073,4 +959,9 @@ def generate_stream(
     yield f"data: [SOURCES]{json.dumps(sources, ensure_ascii=False)}\n\n"
 
     # ---------- 캐시 저장 ----------
-    persist_answer_cache(use_cache, normalized_question, question, full_answer, sources)
+    if use_cache:
+        try:
+            save_answer_cache(normalized_question, question, {"answer": full_answer, "sources": sources})
+            logger.debug("캐시 저장 완료 — question: %s", question)
+        except Exception as e:
+            logger.error("캐시 저장 실패: %s", e, exc_info=True)
