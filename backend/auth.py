@@ -100,32 +100,29 @@ def upsert_user(
     provider_id: str,
     email: str,
     nickname: str,
-    profile_img: str,
 ) -> dict:
     """
     소셜/게스트 로그인 시 사용자 정보를 upsert합니다.
     - 최초 로그인: INSERT (role='user')
-    - 재로그인: 이메일/닉네임/프로필 이미지만 UPDATE (role은 유지)
+    - 재로그인: 이메일/닉네임만 UPDATE (role은 유지)
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO users (provider, provider_id, email, nickname, profile_img)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO users (provider, provider_id, email, nickname)
+                VALUES (%s, %s, %s, %s)
                 ON CONFLICT (provider, provider_id) DO UPDATE
-                    SET email       = EXCLUDED.email,
-                        nickname    = EXCLUDED.nickname,
-                        profile_img = EXCLUDED.profile_img
-                RETURNING id, role, nickname, profile_img
-            """, (provider, provider_id, email, nickname, profile_img))
+                    SET email    = EXCLUDED.email,
+                        nickname = EXCLUDED.nickname
+                RETURNING id, role, nickname
+            """, (provider, provider_id, email, nickname))
             row = cur.fetchone()
             conn.commit()
 
     return {
-        "id":          row[0],
-        "role":        row[1],
-        "nickname":    row[2],
-        "profile_img": row[3],
+        "id":       row[0],
+        "role":     row[1],
+        "nickname": row[2],
     }
 
 
@@ -170,24 +167,17 @@ async def google_login(req: GoogleLoginRequest):
     """
     Flutter에서 전달받은 Google 토큰을 검증하고 JWT를 발급합니다.
     모바일(id_token)과 웹(access_token)은 검증 방식이 다릅니다.
-
-    Flow:
-      1. id_token이 있으면 tokeninfo API로, access_token이 있으면 userinfo API로 검증
-      2. users 테이블 upsert
-      3. JWT 발급 후 반환
     """
     if not req.id_token and not req.access_token:
         raise HTTPException(status_code=400, detail="id_token 또는 access_token이 필요합니다.")
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         if req.id_token:
-            # 모바일: idToken을 Google tokeninfo로 검증
             resp = await client.get(
                 "https://oauth2.googleapis.com/tokeninfo",
                 params={"id_token": req.id_token},
             )
         else:
-            # 웹: accessToken을 Google userinfo로 검증 (유효하지 않으면 401 응답)
             resp = await client.get(
                 "https://www.googleapis.com/oauth2/v3/userinfo",
                 headers={"Authorization": f"Bearer {req.access_token}"},
@@ -201,7 +191,6 @@ async def google_login(req: GoogleLoginRequest):
 
     info = resp.json()
 
-    # 필수 필드 확인
     if "sub" not in info:
         raise HTTPException(status_code=401, detail="Google 토큰에 사용자 정보가 없습니다.")
 
@@ -210,7 +199,6 @@ async def google_login(req: GoogleLoginRequest):
         provider_id = info["sub"],
         email       = info.get("email", ""),
         nickname    = info.get("name", ""),
-        profile_img = info.get("picture", ""),
     )
 
     token = create_access_token(user["id"], user["role"])
@@ -223,7 +211,6 @@ async def google_login(req: GoogleLoginRequest):
         "user_id":      user["id"],
         "role":         user["role"],
         "nickname":     user["nickname"],
-        "profile_img":  user["profile_img"],
         "email":        info.get("email", ""),
     }
 
@@ -237,8 +224,6 @@ async def guest_login(req: GuestLoginRequest):
     """
     비회원(게스트) 로그인. 외부 검증 없이 클라이언트가 보낸 device_id를
     provider_id로 사용해 users 테이블에 upsert하고 JWT를 발급합니다.
-
-    같은 device_id로 다시 호출하면 같은 게스트 계정(대화 기록 유지)으로 로그인됩니다.
     """
     if not req.device_id or not req.device_id.strip():
         raise HTTPException(status_code=400, detail="device_id가 필요합니다.")
@@ -248,7 +233,6 @@ async def guest_login(req: GuestLoginRequest):
         provider_id = req.device_id.strip(),
         email       = "",
         nickname    = "게스트",
-        profile_img = "",
     )
 
     token = create_access_token(user["id"], user["role"])
@@ -261,7 +245,6 @@ async def guest_login(req: GuestLoginRequest):
         "user_id":      user["id"],
         "role":         user["role"],
         "nickname":     user["nickname"],
-        "profile_img":  user["profile_img"],
         "email":        "",
     }
 
@@ -300,7 +283,6 @@ async def _naver_login_with_access_token(access_token: str) -> dict:
         provider_id = str(info["id"]),
         email       = info.get("email", ""),
         nickname    = info.get("nickname", info.get("name", "")),
-        profile_img = "",
     )
 
     token = create_access_token(user["id"], user["role"])
@@ -313,7 +295,6 @@ async def _naver_login_with_access_token(access_token: str) -> dict:
         "user_id":      user["id"],
         "role":         user["role"],
         "nickname":     user["nickname"],
-        "profile_img":  user["profile_img"],
         "email":        info.get("email", ""),
     }
 
@@ -388,7 +369,6 @@ async def _kakao_login_with_access_token(access_token: str) -> dict:
         provider_id = str(info["id"]),
         email       = kakao_account.get("email", ""),
         nickname    = profile.get("nickname", ""),
-        profile_img = profile.get("profile_image_url", ""),
     )
 
     token = create_access_token(user["id"], user["role"])
@@ -401,7 +381,6 @@ async def _kakao_login_with_access_token(access_token: str) -> dict:
         "user_id":      user["id"],
         "role":         user["role"],
         "nickname":     user["nickname"],
-        "profile_img":  user["profile_img"],
         "email":        kakao_account.get("email", ""),
     }
 
@@ -445,13 +424,17 @@ async def kakao_web_login(req: KakaoWebLoginRequest):
     return await _kakao_login_with_access_token(token_data["access_token"])
 
 
+# ──────────────────────────────────────────────────────────
+# 사용자 정보 조회
+# ──────────────────────────────────────────────────────────
+
 @router.get("/me")
 def get_me(user: dict = Depends(get_current_user)):
     """현재 로그인한 사용자 정보를 반환합니다."""
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, email, nickname, profile_img, role, created_at
+                SELECT id, email, nickname, role, created_at
                 FROM users
                 WHERE id = %s
             """, (user["user_id"],))
@@ -464,14 +447,13 @@ def get_me(user: dict = Depends(get_current_user)):
         "id":          row[0],
         "email":       row[1],
         "nickname":    row[2],
-        "profile_img": row[3],
-        "role":        row[4],
-        "created_at":  str(row[5]),
+        "role":        row[3],
+        "created_at":  str(row[4]),
     }
 
 
 # ──────────────────────────────────────────────────────────
-# 채팅 기록 라우터 (chat_sessions / chat_messages)
+# 채팅 기록 라우터 (chat_sessions / chat_messages) — 변경 없음
 # ──────────────────────────────────────────────────────────
 
 chat_router = APIRouter(prefix="/api/chat", tags=["chat-history"])
@@ -489,7 +471,6 @@ def get_or_create_session(
     """
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # 기존 세션 검증
             if session_id is not None:
                 cur.execute(
                     "SELECT id FROM chat_sessions WHERE id = %s AND user_id = %s",
@@ -499,7 +480,6 @@ def get_or_create_session(
                 if row:
                     return session_id
 
-            # 새 세션 생성 (첫 질문 앞 30자를 제목으로)
             title = first_question[:30] + ("..." if len(first_question) > 30 else "")
             cur.execute("""
                 INSERT INTO chat_sessions (user_id, title)
@@ -523,14 +503,11 @@ def save_chat_message(
 
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # 사용자 질문
             cur.execute("""
                 INSERT INTO chat_messages (session_id, role, content)
                 VALUES (%s, 'user', %s)
             """, (session_id, question))
 
-            # 어시스턴트 답변 + 출처
-            # sources에서 chat_history 키 제거 (DB 저장 불필요)
             clean_sources = {
                 k: v for k, v in sources.items()
                 if k in ("web_docs", "book_docs", "video_docs")
@@ -587,7 +564,6 @@ def get_messages(
     """세션의 메시지 목록을 시간순으로 반환합니다."""
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # 본인 세션인지 확인
             cur.execute(
                 "SELECT user_id FROM chat_sessions WHERE id = %s",
                 (session_id,)
@@ -614,7 +590,7 @@ def get_messages(
             "id":         r[0],
             "role":       r[1],
             "content":    r[2],
-            "sources":    r[3],   # JSONB → dict (psycopg2가 자동 파싱)
+            "sources":    r[3],
             "created_at": str(r[4]),
         }
         for r in rows
