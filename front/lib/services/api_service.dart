@@ -76,6 +76,7 @@ class BeBotApiService {
     String question, {
     int? sessionId,
     required void Function(String token) onToken,
+    void Function(SourceInfo sources)? onSources,
   }) async {
     final body = <String, dynamic>{'question': question};
     if (sessionId != null) body['session_id'] = sessionId;
@@ -118,6 +119,8 @@ class BeBotApiService {
             try {
               final map = jsonDecode(jsonStr) as Map<String, dynamic>;
               sources = _parseSourceInfoFromMap(map);
+              // 스트림 종료를 기다리지 않고 즉시 UI에 반영
+              onSources?.call(sources);
             } catch (_) {}
           } else if (data.startsWith('[SESSION]')) {
             newSessionId = int.tryParse(data.replaceFirst('[SESSION]', ''));
