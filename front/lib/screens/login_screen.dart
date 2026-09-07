@@ -27,10 +27,10 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  Future<void> _handleGuestContinue() async {
+  Future<void> _handleNaverSignIn() async {
     setState(() { _loading = true; _error = null; });
     try {
-      await context.read<AuthProvider>().continueAsGuest();
+      await context.read<AuthProvider>().signInWithNaver();
     } catch (e) {
       if (mounted) {
         setState(() => _error = e.toString());
@@ -40,8 +40,35 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<void> _handleKakaoSignIn() async {
+    setState(() { _loading = true; _error = null; });
+    try {
+      await context.read<AuthProvider>().signInWithKakao();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _error = e.toString());
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  // Future<void> _handleGuestContinue() async {
+  //   setState(() { _loading = true; _error = null; });
+  //   try {
+  //     await context.read<AuthProvider>().continueAsGuest();
+  //   } catch (e) {
+  //     if (mounted) {
+  //       setState(() => _error = e.toString());
+  //     }
+  //   } finally {
+  //     if (mounted) setState(() => _loading = false);
+  //   }
+  // }
+
   @override
   Widget build(BuildContext context) {
+    final displayError = _error ?? context.watch<AuthProvider>().error;
     return Scaffold(
       backgroundColor: AppColors.background,
       body: Center(
@@ -84,18 +111,18 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 56),
 
                 // 오류 메시지
-                if (_error != null)
+                if (displayError != null)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 16),
                     child: Text(
-                      _error!,
+                      displayError,
                       style: const TextStyle(
                           color: AppColors.error, fontSize: 13),
                       textAlign: TextAlign.center,
                     ),
                   ),
 
-                // Google 로그인 버튼 / 게스트 버튼
+                // Google / Naver / Kakao 로그인 버튼
                 _loading
                     ? const CircularProgressIndicator(
                         color: AppColors.primary,
@@ -104,17 +131,21 @@ class _LoginScreenState extends State<LoginScreen> {
                         children: [
                           _GoogleSignInButton(onTap: _handleGoogleSignIn),
                           const SizedBox(height: 12),
-                          TextButton(
-                            onPressed: _handleGuestContinue,
-                            child: Text(
-                              '로그인 없이 질문하기',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: AppColors.textSecondary,
-                                decoration: TextDecoration.underline,
-                              ),
-                            ),
-                          ),
+                          _NaverSignInButton(onTap: _handleNaverSignIn),
+                          const SizedBox(height: 12),
+                          _KakaoSignInButton(onTap: _handleKakaoSignIn),
+                          // const SizedBox(height: 12),
+                          // TextButton(
+                          //   onPressed: _handleGuestContinue,
+                          //   child: Text(
+                          //     '로그인 없이 질문하기',
+                          //     style: TextStyle(
+                          //       fontSize: 14,
+                          //       color: AppColors.textSecondary,
+                          //       decoration: TextDecoration.underline,
+                          //     ),
+                          //   ),
+                          // ),
                         ],
                       ),
 
@@ -184,6 +215,60 @@ class _GoogleSignInButton extends StatelessWidget {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _NaverSignInButton extends StatelessWidget {
+  final VoidCallback onTap;
+  const _NaverSignInButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton(
+        onPressed: onTap,
+        style: ElevatedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          backgroundColor: const Color(0xFF03C75A),
+          foregroundColor: Colors.white,
+          elevation: 0,
+        ),
+        child: const Text(
+          'N  네이버로 로그인',
+          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+        ),
+      ),
+    );
+  }
+}
+
+class _KakaoSignInButton extends StatelessWidget {
+  final VoidCallback onTap;
+  const _KakaoSignInButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton(
+        onPressed: onTap,
+        style: ElevatedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          backgroundColor: const Color(0xFFFEE500),
+          foregroundColor: Colors.black87,
+          elevation: 0,
+        ),
+        child: const Text(
+          '카카오로 로그인',
+          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
         ),
       ),
     );

@@ -3,6 +3,15 @@
         android:label="bbot_app1"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+
+        <!-- 네이버 로그인 SDK 설정 -->
+        <meta-data android:name="com.naver.sdk.clientId" android:value="YOUR_NAVER_CLIENT_ID" />
+        <meta-data android:name="com.naver.sdk.clientSecret" android:value="YOUR_NAVER_CLIENT_SECRET" />
+        <meta-data android:name="com.naver.sdk.clientName" android:value="BeBot" />
+
+        <!-- 카카오 로그인 SDK: 네이티브 앱 키 -->
+        <meta-data android:name="com.kakao.sdk.AppKey" android:value="e91b61893d56f29bd7f0b52637cbf974" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -23,6 +32,13 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <!-- 카카오톡 앱으로 로그인 시 리다이렉트 수신 -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:host="oauth" android:scheme="kakaoYOUR_KAKAO_NATIVE_APP_KEY" />
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
