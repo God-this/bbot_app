@@ -1,10 +1,12 @@
-# auth.py — 인증 라우터 (Google/Naver 소셜 로그인 + 게스트 로그인 + JWT)
+# auth.py — 인증 라우터 (Google/Naver/Kakao 소셜 로그인 + 게스트 로그인 + JWT)
 #
 # 엔드포인트:
 #   POST /api/auth/google          — Google idToken/accessToken 검증 → JWT 발급
 #   POST /api/auth/guest           — device_id 기반 게스트 로그인 → JWT 발급
 #   POST /api/auth/naver           — 모바일: Naver access_token 검증 → JWT 발급
 #   POST /api/auth/naver/web       — 웹: Naver 인가 코드(code) 교환 → JWT 발급
+#   POST /api/auth/kakao           — 모바일: Kakao access_token 검증 → JWT 발급
+#   POST /api/auth/kakao/web       — 웹: Kakao 인가 코드(code) 교환 → JWT 발급
 #   GET  /api/auth/me              — 내 정보 조회 (JWT 필요)
 #   GET  /api/chat/sessions        — 내 대화 세션 목록 (JWT 필요)
 #   GET  /api/chat/sessions/{id}/messages — 세션 메시지 조회 (JWT 필요)
@@ -39,6 +41,10 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
 # 웹 네이버 로그인(인가 코드 교환)에만 필요. 모바일 네이티브 SDK는 사용 안 함.
 NAVER_CLIENT_ID     = os.getenv("NAVER_CLIENT_ID")
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
+
+# 웹 카카오 로그인(인가 코드 교환)에만 필요. 모바일 네이티브 SDK는 사용 안 함.
+KAKAO_REST_API_KEY  = os.getenv("KAKAO_REST_API_KEY")
+KAKAO_CLIENT_SECRET = os.getenv("KAKAO_CLIENT_SECRET")
 
 router   = APIRouter(prefix="/api/auth", tags=["auth"])
 security = HTTPBearer()
@@ -144,6 +150,15 @@ class NaverWebLoginRequest(BaseModel):
     code: str
     state: str
     redirect_uri: str  # 네이버 콘솔에 등록한 Callback URL과 정확히 일치해야 함
+
+
+class KakaoLoginRequest(BaseModel):
+    access_token: str  # 모바일: kakao_flutter_sdk_user에서 받은 accessToken
+
+
+class KakaoWebLoginRequest(BaseModel):
+    code: str
+    redirect_uri: str  # 카카오 콘솔에 등록한 Redirect URI와 정확히 일치해야 함
 
 
 # ──────────────────────────────────────────────────────────
@@ -340,6 +355,94 @@ async def naver_web_login(req: NaverWebLoginRequest):
         )
 
     return await _naver_login_with_access_token(token_data["access_token"])
+
+
+# ──────────────────────────────────────────────────────────
+# 인증 엔드포인트 — Kakao
+# ──────────────────────────────────────────────────────────
+
+async def _kakao_login_with_access_token(access_token: str) -> dict:
+    """카카오 access_token으로 프로필 조회 → upsert → JWT 발급 (모바일/웹 공용 로직)"""
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.get(
+            "https://kapi.kakao.com/v2/user/me",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=401,
+            detail=f"카카오 토큰 검증 실패 (status={resp.status_code})"
+        )
+
+    info = resp.json()
+
+    if "id" not in info:
+        raise HTTPException(status_code=401, detail="카카오 토큰에 사용자 정보가 없습니다.")
+
+    kakao_account = info.get("kakao_account", {})
+    profile       = kakao_account.get("profile", {})
+
+    user = upsert_user(
+        provider    = "kakao",
+        provider_id = str(info["id"]),
+        email       = kakao_account.get("email", ""),
+        nickname    = profile.get("nickname", ""),
+        profile_img = profile.get("profile_image_url", ""),
+    )
+
+    token = create_access_token(user["id"], user["role"])
+
+    logger.info("카카오 로그인: [%s] %s (role=%s)", user["id"], kakao_account.get("email", ""), user["role"])
+
+    return {
+        "access_token": token,
+        "token_type":   "bearer",
+        "user_id":      user["id"],
+        "role":         user["role"],
+        "nickname":     user["nickname"],
+        "profile_img":  user["profile_img"],
+        "email":        kakao_account.get("email", ""),
+    }
+
+
+@router.post("/kakao")
+async def kakao_login(req: KakaoLoginRequest):
+    """모바일: kakao_flutter_sdk_user가 발급한 access_token 검증 → JWT 발급"""
+    return await _kakao_login_with_access_token(req.access_token)
+
+
+@router.post("/kakao/web")
+async def kakao_web_login(req: KakaoWebLoginRequest):
+    """
+    웹: 브라우저 리다이렉트로 받은 인가 코드(code)를 access_token으로 교환한 뒤 JWT 발급.
+    client_secret이 필요하므로 반드시 서버에서만 처리 (프론트에 노출 금지).
+    """
+    if not KAKAO_REST_API_KEY or not KAKAO_CLIENT_SECRET:
+        raise HTTPException(status_code=500, detail="카카오 클라이언트 정보가 서버에 설정되지 않았습니다.")
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        token_resp = await client.post(
+            "https://kauth.kakao.com/oauth/token",
+            headers={"Content-Type": "application/x-www-form-urlencoded;charset=utf-8"},
+            data={
+                "grant_type":    "authorization_code",
+                "client_id":     KAKAO_REST_API_KEY,
+                "client_secret": KAKAO_CLIENT_SECRET,
+                "redirect_uri":  req.redirect_uri,
+                "code":          req.code,
+            },
+        )
+
+    token_data = token_resp.json()
+
+    if "access_token" not in token_data:
+        raise HTTPException(
+            status_code=401,
+            detail=f"카카오 토큰 발급 실패: {token_data.get('error_description', token_data)}"
+        )
+
+    return await _kakao_login_with_access_token(token_data["access_token"])
 
 
 @router.get("/me")

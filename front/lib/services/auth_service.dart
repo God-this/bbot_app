@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:flutter_naver_login/flutter_naver_login.dart';
 import 'package:flutter_naver_login/interface/types/naver_login_status.dart';
+import 'package:kakao_flutter_sdk_user/kakao_flutter_sdk_user.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -14,11 +15,17 @@ const _keyToken = 'auth_token';
 const _keyUser = 'auth_user';
 const _keyGuestDeviceId = 'guest_device_id';
 const _keyNaverOAuthState = 'naver_oauth_state';
+const _keyKakaoOAuthState = 'kakao_oauth_state';
 
 const _naverClientId    = 'QsJhbwfPiRXPAGESm8qG';
 const _naverRedirectUri = String.fromEnvironment(
   'NAVER_REDIRECT_URI',
   defaultValue: 'https://bebot.co.kr/auth/naver/callback',
+);
+const _kakaoRestApiKey  = '4a06e82b5323e19aa16203aa074999b4';
+const _kakaoRedirectUri = String.fromEnvironment(
+  'KAKAO_REDIRECT_URI',
+  defaultValue: 'https://bebot.co.kr/auth/kakao/callback',
 );
 
 class AuthService {
@@ -70,6 +77,9 @@ class AuthService {
     } catch (_) {}
     try {
       await FlutterNaverLogin.logOutAndDeleteToken();
+    } catch (_) {}
+    try {
+      await UserApi.instance.logout();
     } catch (_) {}
   }
 
@@ -223,6 +233,79 @@ class AuthService {
         'code':         code,
         'state':        state,
         'redirect_uri': _naverRedirectUri,
+      }),
+    );
+
+    if (resp.statusCode != 200) {
+      throw Exception('서버 로그인 실패 (${resp.statusCode})');
+    }
+
+    final data = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    final token = data['access_token'] as String;
+    final user = UserInfo.fromMap(data);
+
+    await _saveAuth(token, user);
+    return (token: token, user: user);
+  }
+
+  // ── Kakao 로그인 → 백엔드 JWT 발급 ───────────────────────────
+
+  Future<({String token, UserInfo user})?> signInWithKakao() async {
+    String accessToken;
+    try {
+      final installed = await isKakaoTalkInstalled();
+      final token = installed
+          ? await UserApi.instance.loginWithKakaoTalk()
+          : await UserApi.instance.loginWithKakaoAccount();
+      accessToken = token.accessToken;
+    } catch (e) {
+      try {
+        final token = await UserApi.instance.loginWithKakaoAccount();
+        accessToken = token.accessToken;
+      } catch (_) {
+        return null; // 사용자 취소 또는 완전 실패
+      }
+    }
+
+    final resp = await http.post(
+      Uri.parse('$baseUrl/api/auth/kakao'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'access_token': accessToken}),
+    );
+
+    if (resp.statusCode != 200) {
+      throw Exception('서버 로그인 실패 (${resp.statusCode})');
+    }
+
+    final data = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    final token = data['access_token'] as String;
+    final user = UserInfo.fromMap(data);
+
+    await _saveAuth(token, user);
+    return (token: token, user: user);
+  }
+
+  /// 웹: 카카오 로그인 페이지로 현재 탭을 리다이렉트합니다. (여기서 함수 실행은 끝남)
+  Future<void> startKakaoWebLogin() async {
+    final uri = Uri.https('kauth.kakao.com', '/oauth/authorize', {
+      'response_type': 'code',
+      'client_id':     _kakaoRestApiKey,
+      'redirect_uri':  _kakaoRedirectUri,
+    });
+
+    await launchUrl(uri, webOnlyWindowName: '_self');
+  }
+
+  /// 웹: 콜백 페이지로 돌아왔을 때 code를 백엔드로 넘겨 JWT를 발급받습니다.
+  Future<({String token, UserInfo user})?> completeKakaoWebLogin({
+    required String code,
+  }) async {
+    final resp = await http.post(
+      Uri.parse('$baseUrl/api/auth/kakao/web'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'code':         code,
+        'redirect_uri': _kakaoRedirectUri,
       }),
     );
 

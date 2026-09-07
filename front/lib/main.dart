@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:kakao_flutter_sdk_user/kakao_flutter_sdk_user.dart';
 
 import 'theme.dart';
 import 'services/api_service.dart';
@@ -14,6 +15,8 @@ import 'screens/admin_dashboard_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+
+  KakaoSdk.init(nativeAppKey: 'e91b61893d56f29bd7f0b52637cbf974');
 
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
