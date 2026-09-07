@@ -1,8 +1,10 @@
-# auth.py — 인증 라우터 (Google 소셜 로그인 + 게스트 로그인 + JWT)
+# auth.py — 인증 라우터 (Google/Naver 소셜 로그인 + 게스트 로그인 + JWT)
 #
 # 엔드포인트:
 #   POST /api/auth/google          — Google idToken/accessToken 검증 → JWT 발급
 #   POST /api/auth/guest           — device_id 기반 게스트 로그인 → JWT 발급
+#   POST /api/auth/naver           — 모바일: Naver access_token 검증 → JWT 발급
+#   POST /api/auth/naver/web       — 웹: Naver 인가 코드(code) 교환 → JWT 발급
 #   GET  /api/auth/me              — 내 정보 조회 (JWT 필요)
 #   GET  /api/chat/sessions        — 내 대화 세션 목록 (JWT 필요)
 #   GET  /api/chat/sessions/{id}/messages — 세션 메시지 조회 (JWT 필요)
@@ -33,6 +35,10 @@ SECRET_KEY  = os.getenv("JWT_SECRET_KEY", "CHANGE-THIS-SECRET-IN-PRODUCTION")
 ALGORITHM   = "HS256"
 # 토큰 유효기간: 7일 (모바일 앱은 길게 설정하는 것이 UX상 유리)
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
+
+# 웹 네이버 로그인(인가 코드 교환)에만 필요. 모바일 네이티브 SDK는 사용 안 함.
+NAVER_CLIENT_ID     = os.getenv("NAVER_CLIENT_ID")
+NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 
 router   = APIRouter(prefix="/api/auth", tags=["auth"])
 security = HTTPBearer()
@@ -130,8 +136,18 @@ class GuestLoginRequest(BaseModel):
     device_id: str  # 클라이언트가 로컬에 생성/저장한 UUID (재실행해도 동일 게스트 유지용)
 
 
+class NaverLoginRequest(BaseModel):
+    access_token: str  # 모바일: flutter_naver_login에서 받은 accessToken
+
+
+class NaverWebLoginRequest(BaseModel):
+    code: str
+    state: str
+    redirect_uri: str  # 네이버 콘솔에 등록한 Callback URL과 정확히 일치해야 함
+
+
 # ──────────────────────────────────────────────────────────
-# 인증 엔드포인트
+# 인증 엔드포인트 — Google
 # ──────────────────────────────────────────────────────────
 
 @router.post("/google")
@@ -197,6 +213,10 @@ async def google_login(req: GoogleLoginRequest):
     }
 
 
+# ──────────────────────────────────────────────────────────
+# 인증 엔드포인트 — 게스트
+# ──────────────────────────────────────────────────────────
+
 @router.post("/guest")
 async def guest_login(req: GuestLoginRequest):
     """
@@ -229,6 +249,97 @@ async def guest_login(req: GuestLoginRequest):
         "profile_img":  user["profile_img"],
         "email":        "",
     }
+
+
+# ──────────────────────────────────────────────────────────
+# 인증 엔드포인트 — Naver
+# ──────────────────────────────────────────────────────────
+
+async def _naver_login_with_access_token(access_token: str) -> dict:
+    """네이버 access_token으로 프로필 조회 → upsert → JWT 발급 (모바일/웹 공용 로직)"""
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.get(
+            "https://openapi.naver.com/v1/nid/me",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=401,
+            detail=f"네이버 토큰 검증 실패 (status={resp.status_code})"
+        )
+
+    data = resp.json()
+
+    # 네이버는 HTTP 200이어도 resultcode로 성공 여부를 별도 표기함
+    if data.get("resultcode") != "00":
+        raise HTTPException(status_code=401, detail="네이버 토큰이 유효하지 않습니다.")
+
+    info = data.get("response", {})
+
+    if "id" not in info:
+        raise HTTPException(status_code=401, detail="네이버 토큰에 사용자 정보가 없습니다.")
+
+    user = upsert_user(
+        provider    = "naver",
+        provider_id = str(info["id"]),
+        email       = info.get("email", ""),
+        nickname    = info.get("nickname", info.get("name", "")),
+        profile_img = "",
+    )
+
+    token = create_access_token(user["id"], user["role"])
+
+    logger.info("네이버 로그인: [%s] %s (role=%s)", user["id"], info.get("email", ""), user["role"])
+
+    return {
+        "access_token": token,
+        "token_type":   "bearer",
+        "user_id":      user["id"],
+        "role":         user["role"],
+        "nickname":     user["nickname"],
+        "profile_img":  user["profile_img"],
+        "email":        info.get("email", ""),
+    }
+
+
+@router.post("/naver")
+async def naver_login(req: NaverLoginRequest):
+    """모바일: flutter_naver_login이 발급한 access_token 검증 → JWT 발급"""
+    return await _naver_login_with_access_token(req.access_token)
+
+
+@router.post("/naver/web")
+async def naver_web_login(req: NaverWebLoginRequest):
+    """
+    웹: 브라우저 리다이렉트로 받은 인가 코드(code)를 access_token으로 교환한 뒤 JWT 발급.
+    client_secret이 필요하므로 반드시 서버에서만 처리 (프론트에 노출 금지).
+    """
+    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+        raise HTTPException(status_code=500, detail="네이버 클라이언트 정보가 서버에 설정되지 않았습니다.")
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        token_resp = await client.get(
+            "https://nid.naver.com/oauth2.0/token",
+            params={
+                "grant_type":    "authorization_code",
+                "client_id":     NAVER_CLIENT_ID,
+                "client_secret": NAVER_CLIENT_SECRET,
+                "code":          req.code,
+                "state":         req.state,
+                "redirect_uri":  req.redirect_uri,
+            },
+        )
+
+    token_data = token_resp.json()
+
+    if "access_token" not in token_data:
+        raise HTTPException(
+            status_code=401,
+            detail=f"네이버 토큰 발급 실패: {token_data.get('error_description', token_data)}"
+        )
+
+    return await _naver_login_with_access_token(token_data["access_token"])
 
 
 @router.get("/me")
