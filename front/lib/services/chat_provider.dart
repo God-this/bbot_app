@@ -123,6 +123,19 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 로그아웃(또는 계정 전환) 시 호출 — 이전 사용자의 흔적을 모두 제거한다.
+  /// clearChat()과 달리 세션 목록과 로딩 플래그까지 초기화한다.
+  void reset() {
+    _messages          = [];
+    _sessions          = [];
+    _error             = null;
+    _isTyping          = false;
+    _activeSessionId   = null;
+    _isLoadingSessions = false;
+    _isLoadingSession  = false;
+    notifyListeners();
+  }
+
   // ─── 세션 목록 ───────────────────────────────────────────
 
   Future<void> fetchSessions() async {
