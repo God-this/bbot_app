@@ -162,6 +162,9 @@ class ChatProvider extends ChangeNotifier {
   Future<void> loadSession(int sessionId) async {
     _isLoadingSession = true;
     _error            = null;
+    // 로딩 중 이전 대화가 잠깐 비치지 않도록 먼저 비운다.
+    _messages         = [];
+    _activeSessionId  = null;
     notifyListeners();
 
     try {

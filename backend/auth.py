@@ -562,6 +562,8 @@ def get_messages(
     user: dict = Depends(get_current_user),
 ):
     """세션의 메시지 목록을 시간순으로 반환합니다."""
+    # 소유자 확인과 메시지 조회를 하나의 커넥션에서 처리한다.
+    # (연결을 두 번 열면 그만큼 접속 왕복이 늘어 응답이 느려진다)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -570,13 +572,11 @@ def get_messages(
             )
             row = cur.fetchone()
 
-    if not row:
-        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
-    if row[0] != user["user_id"]:
-        raise HTTPException(status_code=403, detail="접근 권한이 없습니다.")
+            if not row:
+                raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+            if row[0] != user["user_id"]:
+                raise HTTPException(status_code=403, detail="접근 권한이 없습니다.")
 
-    with get_conn() as conn:
-        with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, role, content, sources, created_at
                 FROM chat_messages

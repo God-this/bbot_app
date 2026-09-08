@@ -140,6 +140,26 @@ class _ChatScreenState extends State<ChatScreen> {
                       // 채팅 영역
                       Expanded(
                         child: Builder(builder: (context) {
+                          // 이전 대화를 불러오는 중에는 본문에 진행 표시를 둔다.
+                          // (드로어는 이미 닫힌 뒤라 드로어 안의 표시는 보이지 않는다)
+                          if (chat.isLoadingSession) {
+                            return const Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  CircularProgressIndicator(),
+                                  SizedBox(height: 16),
+                                  Text(
+                                    '대화를 불러오는 중...',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: AppColors.textSecondary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }
                           if (!chat.hasMessages) {
                             return WelcomeView(
                               suggestions: chat.suggestedQuestions,

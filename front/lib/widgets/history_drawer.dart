@@ -34,8 +34,15 @@ class HistoryDrawer extends StatelessWidget {
                   activeSessionId: chat.activeSessionId,
                   isLoading:       chat.isLoadingSession,
                   onTap: (id) {
-                    Navigator.of(context).pop();
+                    // 이미 열려 있는 세션이면 다시 불러오지 않는다.
+                    if (id == chat.activeSessionId) {
+                      Navigator.of(context).pop();
+                      return;
+                    }
+                    // 드로어를 닫기 전에 로딩을 시작해야
+                    // 본문의 진행 표시가 곧바로 나타난다.
                     chat.loadSession(id);
+                    Navigator.of(context).pop();
                     onSessionLoaded?.call();
                   },
                   onDelete: (session) => _confirmDelete(context, chat, session),
