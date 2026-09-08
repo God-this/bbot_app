@@ -179,8 +179,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                   .copyWith(scrollbars: false),
                               child: ListView.builder(
                                 controller: _scrollController,
-                                padding: const EdgeInsets.symmetric(
-                                    vertical: 16),
+                                padding: const EdgeInsets.fromLTRB(
+                                    0, 16, 0, 8),
                                 itemCount: chat.messages.length,
                                 itemBuilder: (context, index) {
                                   final msg = chat.messages[index];

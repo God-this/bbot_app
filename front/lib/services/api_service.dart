@@ -95,10 +95,25 @@ class BeBotApiService {
     SourceInfo sources = SourceInfo();
     int? newSessionId;
 
+    // 서버는 토큰 → [DONE] → [SOURCES] → [SESSION] 순으로 보내고,
+    // 그 뒤 캐시 저장(임베딩 API 호출, 수 초)을 마친 다음에야 연결을 닫는다.
+    // 연결 종료를 기다리면 답변이 끝난 뒤에도 입력창이 묶이므로,
+    // 답변에 필요한 이벤트를 모두 받은 시점에 곧바로 완료 처리한다.
     final completer = Completer<void>();
     final buffer = StringBuffer();
+    var streamDone = false;
+    var sourcesReceived = false;
 
-    streamedResponse.stream.transform(utf8.decoder).listen(
+    void finishIfReady() {
+      // [DONE] 이후 오는 [SOURCES]까지 받으면 더 기다릴 이유가 없다.
+      // [SESSION]은 새 대화일 때만 오므로 완료 조건에 넣지 않는다.
+      if (streamDone && sourcesReceived && !completer.isCompleted) {
+        completer.complete();
+      }
+    }
+
+    late final StreamSubscription<String> subscription;
+    subscription = streamedResponse.stream.transform(utf8.decoder).listen(
       (chunk) {
         buffer.write(chunk);
         final raw = buffer.toString();
@@ -113,7 +128,8 @@ class BeBotApiService {
           final data = event.replaceFirst('data: ', '');
 
           if (data == '[DONE]') {
-            // 완료 신호
+            streamDone = true;
+            finishIfReady();
           } else if (data.startsWith('[SOURCES]')) {
             final jsonStr = data.replaceFirst('[SOURCES]', '');
             try {
@@ -122,6 +138,8 @@ class BeBotApiService {
               // 스트림 종료를 기다리지 않고 즉시 UI에 반영
               onSources?.call(sources);
             } catch (_) {}
+            sourcesReceived = true;
+            finishIfReady();
           } else if (data.startsWith('[SESSION]')) {
             newSessionId = int.tryParse(data.replaceFirst('[SESSION]', ''));
           } else {
@@ -129,11 +147,22 @@ class BeBotApiService {
           }
         }
       },
-      onDone: () => completer.complete(),
-      onError: (e) => completer.completeError(e),
+      // 연결이 먼저 닫히는 경우(오류·조기 종료)에도 대기를 풀어준다.
+      onDone: () {
+        if (!completer.isCompleted) completer.complete();
+      },
+      onError: (e) {
+        if (!completer.isCompleted) completer.completeError(e);
+      },
+      cancelOnError: true,
     );
 
-    await completer.future;
+    try {
+      await completer.future;
+    } finally {
+      // 남은 캐시 저장 구간을 기다리지 않고 연결을 정리한다.
+      unawaited(subscription.cancel());
+    }
     return (sources: sources, sessionId: newSessionId);
   }
 
