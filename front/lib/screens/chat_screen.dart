@@ -1,6 +1,7 @@
 // 메인 채팅 화면
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/chat_models.dart';
 import '../theme.dart';
 import '../services/chat_provider.dart';
@@ -19,8 +20,34 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
+  static const _drawerMinWidth  = 240.0;
+  static const _drawerMaxWidth  = 420.0;
+  static const _drawerWidthPrefKey = 'history_drawer_width';
+
   final _scrollController = ScrollController();
   SourceInfo? _selectedSources;
+
+  /// 사용자가 드래그로 지정한 드로어 폭 (null이면 화면 크기 기반 기본값)
+  double? _userDrawerWidth;
+
+  @override
+  void initState() {
+    super.initState();
+    _restoreDrawerWidth();
+  }
+
+  Future<void> _restoreDrawerWidth() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getDouble(_drawerWidthPrefKey);
+    if (saved != null && mounted) {
+      setState(() => _userDrawerWidth = saved);
+    }
+  }
+
+  Future<void> _persistDrawerWidth(double width) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_drawerWidthPrefKey, width);
+  }
 
   @override
   void dispose() {
@@ -48,14 +75,54 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  /// 화면 크기에 맞춘 드로어 기본 폭
+  /// - 모바일: 화면 비율 기반이되 최대 320px
+  /// - 태블릿/데스크톱: 고정 폭
+  double _defaultDrawerWidth(BuildContext context) {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    if (screenWidth < 600) {
+      return (screenWidth * 0.85).clamp(0.0, 320.0);
+    }
+    return 300;
+  }
+
+  /// 현재 적용할 드로어 폭
+  /// 사용자가 드래그로 조정한 값이 있으면 그 값을, 없으면 기본값을 쓴다.
+  /// 어느 쪽이든 화면을 넘지 않도록 허용 범위 안으로 제한한다.
+  double _drawerWidth(BuildContext context) {
+    final width = _userDrawerWidth ?? _defaultDrawerWidth(context);
+    return width.clamp(_drawerMinWidth, _maxDrawerWidth(context));
+  }
+
+  /// 좁은 화면에서 드로어가 본문을 완전히 덮지 않도록 상한을 낮춘다.
+  double _maxDrawerWidth(BuildContext context) {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final limit = screenWidth * 0.85;
+    return limit < _drawerMinWidth
+        ? _drawerMinWidth
+        : (limit < _drawerMaxWidth ? limit : _drawerMaxWidth);
+  }
+
+  void _handleDrawerResize(BuildContext context, double deltaX) {
+    final next = (_drawerWidth(context) + deltaX)
+        .clamp(_drawerMinWidth, _maxDrawerWidth(context));
+    if (next != _userDrawerWidth) {
+      setState(() => _userDrawerWidth = next);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: _buildAppBar(context),
       drawer: Drawer(
-        width: MediaQuery.sizeOf(context).width * 0.85,
-        child: HistoryDrawer(
-          onSessionLoaded: () => setState(() => _selectedSources = null),
+        width: _drawerWidth(context),
+        child: _ResizableDrawerContent(
+          onResize: (deltaX) => _handleDrawerResize(context, deltaX),
+          onResizeEnd: () => _persistDrawerWidth(_drawerWidth(context)),
+          child: HistoryDrawer(
+            onSessionLoaded: () => setState(() => _selectedSources = null),
+          ),
         ),
       ),
       onDrawerChanged: (isOpened) {
@@ -328,6 +395,71 @@ class _ChatScreenState extends State<ChatScreen> {
 }
 
 // ─── 날짜 구분선 ──────────────────────────────────────
+// ─── 드로어 폭 조절 핸들 ──────────────────────────────────
+
+/// 드로어 오른쪽 가장자리에 드래그 핸들을 얹어 폭을 조절할 수 있게 한다.
+class _ResizableDrawerContent extends StatefulWidget {
+  final Widget child;
+  final void Function(double deltaX) onResize;
+  final VoidCallback onResizeEnd;
+
+  const _ResizableDrawerContent({
+    required this.child,
+    required this.onResize,
+    required this.onResizeEnd,
+  });
+
+  @override
+  State<_ResizableDrawerContent> createState() =>
+      _ResizableDrawerContentState();
+}
+
+class _ResizableDrawerContentState extends State<_ResizableDrawerContent> {
+  bool _hovered = false;
+  bool _dragging = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = _hovered || _dragging;
+
+    return Stack(
+      children: [
+        Positioned.fill(child: widget.child),
+        Positioned(
+          top: 0,
+          bottom: 0,
+          right: 0,
+          width: 12,
+          child: MouseRegion(
+            cursor: SystemMouseCursors.resizeLeftRight,
+            onEnter: (_) => setState(() => _hovered = true),
+            onExit: (_) => setState(() => _hovered = false),
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onHorizontalDragStart: (_) => setState(() => _dragging = true),
+              onHorizontalDragUpdate: (d) => widget.onResize(d.delta.dx),
+              onHorizontalDragEnd: (_) {
+                setState(() => _dragging = false);
+                widget.onResizeEnd();
+              },
+              onHorizontalDragCancel: () => setState(() => _dragging = false),
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 120),
+                  width: active ? 3 : 1,
+                  height: double.infinity,
+                  color: active ? AppColors.primaryDark : AppColors.divider,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _DateDivider extends StatelessWidget {
   final DateTime date;
   const _DateDivider({required this.date});
