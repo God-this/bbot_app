@@ -29,20 +29,29 @@ void main() {
   runApp(const BeBotApp());
 }
 
-class BeBotApp extends StatelessWidget {
+class BeBotApp extends StatefulWidget {
   const BeBotApp({super.key});
 
   @override
+  State<BeBotApp> createState() => _BeBotAppState();
+}
+
+class _BeBotAppState extends State<BeBotApp> {
+  /// 직전 빌드에서 로그인돼 있던 사용자 ID.
+  /// 로그아웃/계정 전환을 감지해 ChatProvider를 초기화하는 데 쓴다.
+  int? _lastUserId;
+
+  static const _backendUrl = String.fromEnvironment(
+    'BACKEND_URL',
+    defaultValue: 'http://localhost:8000',
+  );
+
+  late final AuthService     authService  = AuthService(baseUrl: _backendUrl);
+  late final BeBotApiService apiService   = BeBotApiService(baseUrl: _backendUrl);
+  late final AdminApiService adminService = AdminApiService(baseUrl: _backendUrl);
+
+  @override
   Widget build(BuildContext context) {
-    const backendUrl = String.fromEnvironment(
-      'BACKEND_URL',
-      defaultValue: 'http://localhost:8000',
-    );
-
-    final authService  = AuthService(baseUrl: backendUrl);
-    final apiService   = BeBotApiService(baseUrl: backendUrl);
-    final adminService = AdminApiService(baseUrl: backendUrl);
-
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(
@@ -58,6 +67,18 @@ class BeBotApp extends StatelessWidget {
           update: (_, auth, previous) {
             apiService.setToken(auth.token);
             adminService.setToken(auth.token);
+
+            // 로그아웃했거나 다른 계정으로 바뀌었으면 이전 사용자의
+            // 대화 상태가 화면에 남지 않도록 초기화한다.
+            // update()는 빌드 중에 호출되므로 notifyListeners()가
+            // 빌드 도중 실행되지 않게 다음 프레임으로 미룬다.
+            final userId = auth.user?.userId;
+            if (userId != _lastUserId) {
+              _lastUserId = userId;
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                previous!.reset();
+              });
+            }
             return previous!;
           },
         ),

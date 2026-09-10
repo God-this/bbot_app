@@ -23,7 +23,7 @@ class WelcomeView extends StatelessWidget {
           constraints: const BoxConstraints(maxWidth: 680),
           child: Column(
             children: [
-              const SizedBox(height: 60),
+              const SizedBox(height: 40),
 
               // BeBot 로고 아이콘
               Container(
@@ -81,7 +81,7 @@ class WelcomeView extends StatelessWidget {
                     .slideY(begin: 0.15, end: 0);
               }),
 
-              const SizedBox(height: 40),
+              const SizedBox(height: 16),
             ],
           ),
         ),
