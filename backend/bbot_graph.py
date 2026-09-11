@@ -848,6 +848,13 @@ def generate_stream(
 
     langfuse = get_langfuse_client()
 
+    with propagate_attributes(
+        session_id=thread_id,
+        user_id=user_id,
+        tags=[source],
+    ):
+        langfuse.update_current_span(input={"question": question})
+
     safe, reason = is_safe_input(question)
     if not safe:
        logger.warning("[Blocked-Stream] reason=%s | question=%s", reason, question[:200])
