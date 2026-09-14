@@ -82,6 +82,34 @@ def get_model_info() -> dict:
     }
 
 
+def get_guardrail_client():
+    """가드레일 판단용 openai.OpenAI 클라이언트 — GUARDRAIL_PROVIDER 기준
+
+    답변 생성 모델(get_client())과 독립적으로 설정 가능.
+    Structured Outputs(strict json_schema)를 쓰므로 이를 지원하는 프로바이더여야 한다.
+    설정이 누락돼 클라이언트를 만들 수 없으면 None을 반환한다
+    (호출부에서 fail-open으로 검사를 스킵).
+    """
+    from config import (
+        GUARDRAIL_PROVIDER, GUARDRAIL_UPSTAGE_MODEL,
+        GUARDRAIL_OPENAI_MODEL, GUARDRAIL_OLLAMA_MODEL,
+    )
+    from langfuse.openai import OpenAI
+
+    if GUARDRAIL_PROVIDER == "upstage":
+        if not UPSTAGE_API_KEY:
+            return None, None
+        return OpenAI(api_key=UPSTAGE_API_KEY, base_url=UPSTAGE_BASE_URL), GUARDRAIL_UPSTAGE_MODEL
+    elif GUARDRAIL_PROVIDER == "openai":
+        if not OPENAI_API_KEY:
+            return None, None
+        return OpenAI(api_key=OPENAI_API_KEY), GUARDRAIL_OPENAI_MODEL
+    elif GUARDRAIL_PROVIDER == "ollama":
+        return OpenAI(api_key="ollama", base_url=f"{OLLAMA_BASE_URL}/v1"), GUARDRAIL_OLLAMA_MODEL
+    else:
+        raise ValueError(f"지원하지 않는 GUARDRAIL_PROVIDER: {GUARDRAIL_PROVIDER}")
+
+
 def get_client():
     """openai.OpenAI 클라이언트 — chat.completions.create 직접 호출용
 
