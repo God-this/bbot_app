@@ -214,7 +214,12 @@ async def chat_stream(
     from bbot_graph import generate_stream
 
     async def event_generator():
-        gen = generate_stream(req.question.strip(), thread_id=f"user_{user['user_id']}")
+        gen = generate_stream(
+            req.question.strip(),
+            thread_id=str(user["user_id"]),
+            user_id=str(user["user_id"]),
+            source="api",
+        )
 
         full_answer = ""
         sources_raw = {}
