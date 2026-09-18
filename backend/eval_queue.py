@@ -1,7 +1,12 @@
-"""qa_eval_queue CRUD.
+"""qa_eval_queue 적재 — 서비스(BeBot) 측 쓰기 경로.
 
-②단계에서는 적재(enqueue_eval)만 사용한다. 배치 조회/완료 처리
-(fetch_pending / mark_queue_evaluated)는 ③단계 runner가 쓸 것을 함께 둔다.
+답변 생성 시 RAGAS 평가 대기 항목을 큐에 넣는다. 평가 자체는 별도 프로젝트
+(bebot-cache-eval)가 이 큐를 읽어서 수행하므로, 이 모듈은 ragas에 의존하지 않고
+표준 라이브러리와 config만 쓴다.
+
+⚠️ 공유 계약 — 평가 프로젝트와 맞춰야 하는 것:
+  - qa_eval_queue 테이블 스키마 (schema/qa_eval.sql, 평가 레포가 소유)
+  - CONTEXT_CHAR_LIMIT = 800 (아래 주석 참조)
 """
 
 import json
@@ -74,55 +79,3 @@ def enqueue_eval(
     except Exception as e:
         logger.error("평가 큐 적재 실패: %s", e, exc_info=True)
         return False
-
-
-def fetch_pending(limit: int = 200) -> list[dict]:
-    """미평가 항목을 오래된 순으로 조회 (③단계 배치용).
-
-    BATCH_LIMIT 초과분은 Postgres 큐에 남아 다음 회차로 자연 이월된다.
-    """
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id, cache_key, normalized_question, original_question,
-                       answer, contexts, context_char_limit
-                FROM qa_eval_queue
-                WHERE evaluated_at IS NULL
-                ORDER BY created_at
-                LIMIT %s
-            """, (limit,))
-            rows = cur.fetchall()
-
-    return [
-        {
-            "id": row[0],
-            "cache_key": row[1],
-            "normalized_question": row[2],
-            "original_question": row[3],
-            "answer": row[4],
-            "contexts": row[5],
-            "context_char_limit": row[6],
-        }
-        for row in rows
-    ]
-
-
-def mark_queue_evaluated(queue_ids: list[int]) -> int:
-    """평가를 마친 큐 항목에 evaluated_at을 기록 (③단계 배치용).
-
-    Returns: 갱신된 행 수
-    """
-    if not queue_ids:
-        return 0
-
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                UPDATE qa_eval_queue
-                SET evaluated_at = now()
-                WHERE id = ANY(%s) AND evaluated_at IS NULL
-            """, (queue_ids,))
-            updated = cur.rowcount
-            conn.commit()
-
-    return updated

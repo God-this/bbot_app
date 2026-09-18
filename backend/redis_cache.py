@@ -1,5 +1,4 @@
 import json
-from datetime import datetime, timezone
 
 import redis
 from sklearn.metrics.pairwise import cosine_similarity
@@ -48,10 +47,6 @@ def _cache_key(normalized_question: str) -> str:
 
 def _tombstone_key(normalized_question: str) -> str:
     return f"{TOMBSTONE_PREFIX}{normalized_question}"
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 # ==================== 임베딩 ====================
@@ -234,72 +229,9 @@ def search_semantic_cache(query: str, threshold: float = 0.96):
     return None
 
 
-# ==================== 평가 결과 반영 ====================
-# 아래 세 함수는 RAGAS 평가 배치(후속 단계)와 관리자 대시보드에서 호출한다.
-# payload 스키마를 나중에 또 바꾸면 캐시를 전부 폐기해야 하므로 미리 넣어둔다.
-
-def mark_evaluated(normalized_question: str, score: float) -> bool:
-    """평가를 통과한 항목을 passed로 전환. 남은 TTL은 보존한다."""
-    key = _cache_key(normalized_question)
-    raw = r.get(key)
-    if not raw:
-        return False
-
-    try:
-        item = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.warning("mark_evaluated 파싱 실패 — key=%s", normalized_question)
-        return False
-
-    ttl = r.ttl(key)
-    if ttl is None or ttl < 0:
-        # -1(무만료) / -2(키 없음) — 갱신 중 만료된 경우 포함
-        ttl = DEFAULT_EXPIRE
-
-    item["eval"] = {
-        "status": "passed",
-        "score": score,
-        "evaluated_at": _now_iso(),
-    }
-    r.setex(key, ttl, json.dumps(item, ensure_ascii=False))
-    return True
-
-
-def delete_and_tombstone(normalized_question: str, score: float, reason: str,
-                         original_question: str = "") -> int:
-    """평가 탈락 항목을 캐시에서 제거하고 tombstone에 누적 기록.
-
-    Returns: 누적된 fail_count
-    """
-    key = _cache_key(normalized_question)
-
-    if not original_question:
-        # 삭제하기 전에 원본 질문을 건져둔다 (대시보드 표시용)
-        raw = r.get(key)
-        if raw:
-            try:
-                original_question = json.loads(raw).get("query", "")
-            except json.JSONDecodeError:
-                pass
-
-    r.delete(key)
-
-    tkey = _tombstone_key(normalized_question)
-    fail_count = r.hincrby(tkey, "fail_count", 1)
-    r.hset(tkey, mapping={
-        "original_query": original_question,
-        "last_score": score,
-        "last_rejected_at": _now_iso(),
-        "reason": reason,
-    })
-    r.expire(tkey, TOMBSTONE_EXPIRE)
-
-    logger.info(
-        "캐시 탈락 처리 — fail_count=%d, score=%.4f, reason=%s, question=%s",
-        fail_count, score, reason, normalized_question
-    )
-    return fail_count
-
+# ==================== Tombstone 조회 ====================
+# tombstone을 *쓰는* 쪽(평가 배치)은 별도 프로젝트(bebot-cache-eval)에 있다.
+# 서비스는 save_answer_cache에서 읽기만 한다.
 
 def get_tombstone(normalized_question: str):
     """tombstone 조회. 없으면 None."""
@@ -318,8 +250,3 @@ def get_tombstone(normalized_question: str):
         data["last_score"] = None
 
     return data
-
-
-def clear_tombstone(normalized_question: str) -> bool:
-    """관리자 수동 해제 — 문서 보강 후 재평가 기회를 준다."""
-    return bool(r.delete(_tombstone_key(normalized_question)))

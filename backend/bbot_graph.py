@@ -79,7 +79,7 @@ except ImportError:
     _REDIS_AVAILABLE = False
 
 try:
-    from ragas_eval.queue_repo import enqueue_eval, build_contexts
+    from eval_queue import enqueue_eval, build_contexts
     _EVAL_QUEUE_AVAILABLE = True
 except ImportError:
     # 평가 큐를 못 불러와도 답변 생성은 정상 동작해야 한다.
