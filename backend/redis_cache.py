@@ -74,7 +74,7 @@ def _filter_sources(sources) -> dict:
     return {k: v for k, v in sources.items() if k in CACHED_SOURCE_KEYS}
 
 
-def save_answer_cache(normalized_question: str, original_question: str, answer_data: dict, expire: int = DEFAULT_EXPIRE):
+def save_answer_cache(normalized_question: str, original_question: str, answer_data: dict, expire: int = DEFAULT_EXPIRE) -> bool:
     """
     answer_data({"answer":..., "sources":...})를 임베딩과 함께 한 번만 저장.
     exact 조회(정규화된 질문 → key)와 semantic 조회(임베딩 유사도) 모두
@@ -82,6 +82,11 @@ def save_answer_cache(normalized_question: str, original_question: str, answer_d
 
     반복적으로 품질 평가에서 탈락한 질문(tombstone)은 저장을 건너뛴다.
     답변 자체는 사용자에게 정상 제공되며, 캐시에만 올리지 않는다.
+
+    Returns:
+        실제로 캐시에 저장했으면 True, tombstone으로 건너뛰었으면 False.
+        호출부가 이 값을 보고 평가 큐 적재 여부를 결정한다 — 캐시에 없는 항목을
+        큐에 넣으면 배치가 mark_evaluated 시 대상 키를 찾지 못한다.
     """
     tombstone = get_tombstone(normalized_question)
     if tombstone and tombstone.get("fail_count", 0) >= TOMBSTONE_FAIL_LIMIT:
@@ -89,7 +94,7 @@ def save_answer_cache(normalized_question: str, original_question: str, answer_d
             "tombstone 누적 %d회 — 캐시 저장 스킵: %s",
             tombstone["fail_count"], original_question
         )
-        return
+        return False
 
     embedding = get_embedding(original_question)
 
@@ -116,6 +121,7 @@ def save_answer_cache(normalized_question: str, original_question: str, answer_d
     )
 
     logger.debug("캐시 저장 완료 (embedding dim=%d) — question: %s", len(embedding), original_question)
+    return True
 
 
 # ==================== 조회 1단계: Exact ====================
