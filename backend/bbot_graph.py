@@ -677,6 +677,8 @@ def lookup_answer_cache(question: str, normalized_question: str, use_cache: bool
                 if not _raw:
                     continue
                 _item = json.loads(_raw)
+                if _item.get("schema_version") != 2:
+                    continue  # 폐기된 v1 항목 — 로그에서도 스킵
                 if len(_item.get("embedding", [])) != len(_q_emb):
                     continue  # 다른 provider로 저장된 옛 데이터는 로그에서도 스킵
                 _score = _cosine_similarity([_q_emb], [_item["embedding"]])[0][0]
