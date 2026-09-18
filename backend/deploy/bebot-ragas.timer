@@ -1,0 +1,18 @@
+# bebot-ragas.service를 12시간 주기로 실행 (spec §6.4)
+#
+# pending 항목은 semantic 캐시 후보에서 제외되므로(⑤단계 이후),
+# 주기가 길수록 유사 질문이 캐시 미스로 재생성되는 창이 길어진다.
+# 비용 데이터를 본 뒤 6시간으로 줄이는 것을 검토할 것.
+
+[Unit]
+Description=Run BeBot RAGAS evaluation batch every 12h
+
+[Timer]
+# 트래픽이 적은 시간대 (03:00 / 15:00)
+OnCalendar=*-*-* 03,15:00:00
+# 서버가 꺼져 있어 놓친 회차는 부팅 후 실행
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
