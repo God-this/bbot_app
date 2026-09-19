@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 import contextvars
 from datetime import timedelta
 from typing import Generator, List, Literal
+from urllib.parse import urlparse
 from typing_extensions import TypedDict
 
 from langchain_core.prompts import ChatPromptTemplate
@@ -42,8 +43,15 @@ _reranker = CrossEncoder("cross-encoder/mmarco-mMiniLMv2-L12-H384-v1") # 다국�
 # GUNGGEUM_PURCHASE_URL = "https://www.yes24.com/product/goods/85464691"
 
 
+def is_qna_list_url(url: str) -> bool:
+    """URL 경로에 /question이 포함된 QnA 목록 형태 페이지인지 확인 (예: creation.kr/question03/?bmode=view&idx=...)"""
+    return "/question" in urlparse(url or "").path
+
+
 def classify_documents(docs: list[dict]) -> tuple[list[dict], list[dict], list[dict]]:
     """문서 리스트를 web / book / video로 분류.
+
+    web 출처 중 QnA 목록 형태(/question) URL은 기존 순서를 유지한 채 목록 맨 뒤로 보낸다.
 
     [임시] book_name이 '궁금해궁금해'인 문서는 book이 아니라 web 취급하여
     페이지 정보 대신 구매 링크를 보여줌.
@@ -65,6 +73,9 @@ def classify_documents(docs: list[dict]) -> tuple[list[dict], list[dict], list[d
         elif "url" in doc:
             doc.setdefault("type", "web")
             web_docs.append(doc)
+
+    # sort는 stable이라 False(일반 출처) → True(/question) 순으로, 각 그룹 내 순서는 유지됨
+    web_docs.sort(key=lambda d: is_qna_list_url(d.get("url", "")))
 
     return web_docs, book_docs, video_docs
 
