@@ -82,32 +82,54 @@ def get_model_info() -> dict:
     }
 
 
+def _build_judge_client(name, provider, upstage_model, openai_model, ollama_model):
+    """판단용 openai.OpenAI 클라이언트와 모델명을 (client, model)로 반환
+
+    설정이 누락돼 클라이언트를 만들 수 없으면 (None, None)을 반환한다
+    (호출부에서 fail-open으로 검사를 스킵).
+    """
+    from langfuse.openai import OpenAI
+
+    if provider == "upstage":
+        if not UPSTAGE_API_KEY:
+            return None, None
+        return OpenAI(api_key=UPSTAGE_API_KEY, base_url=UPSTAGE_BASE_URL), upstage_model
+    elif provider == "openai":
+        if not OPENAI_API_KEY:
+            return None, None
+        return OpenAI(api_key=OPENAI_API_KEY), openai_model
+    elif provider == "ollama":
+        return OpenAI(api_key="ollama", base_url=f"{OLLAMA_BASE_URL}/v1"), ollama_model
+    else:
+        raise ValueError(f"지원하지 않는 {name}: {provider}")
+
+
 def get_guardrail_client():
-    """가드레일 판단용 openai.OpenAI 클라이언트 — GUARDRAIL_PROVIDER 기준
+    """입력 가드레일(탈옥/주제 판단)용 클라이언트 — GUARDRAIL_PROVIDER 기준
 
     답변 생성 모델(get_client())과 독립적으로 설정 가능.
     Structured Outputs(strict json_schema)를 쓰므로 이를 지원하는 프로바이더여야 한다.
-    설정이 누락돼 클라이언트를 만들 수 없으면 None을 반환한다
-    (호출부에서 fail-open으로 검사를 스킵).
     """
     from config import (
         GUARDRAIL_PROVIDER, GUARDRAIL_UPSTAGE_MODEL,
         GUARDRAIL_OPENAI_MODEL, GUARDRAIL_OLLAMA_MODEL,
     )
-    from langfuse.openai import OpenAI
+    return _build_judge_client(
+        "GUARDRAIL_PROVIDER", GUARDRAIL_PROVIDER,
+        GUARDRAIL_UPSTAGE_MODEL, GUARDRAIL_OPENAI_MODEL, GUARDRAIL_OLLAMA_MODEL,
+    )
 
-    if GUARDRAIL_PROVIDER == "upstage":
-        if not UPSTAGE_API_KEY:
-            return None, None
-        return OpenAI(api_key=UPSTAGE_API_KEY, base_url=UPSTAGE_BASE_URL), GUARDRAIL_UPSTAGE_MODEL
-    elif GUARDRAIL_PROVIDER == "openai":
-        if not OPENAI_API_KEY:
-            return None, None
-        return OpenAI(api_key=OPENAI_API_KEY), GUARDRAIL_OPENAI_MODEL
-    elif GUARDRAIL_PROVIDER == "ollama":
-        return OpenAI(api_key="ollama", base_url=f"{OLLAMA_BASE_URL}/v1"), GUARDRAIL_OLLAMA_MODEL
-    else:
-        raise ValueError(f"지원하지 않는 GUARDRAIL_PROVIDER: {GUARDRAIL_PROVIDER}")
+
+def get_doc_judge_client():
+    """문서 충분성 판단용 클라이언트 — DOC_JUDGE_PROVIDER 기준 (입력 가드레일과 독립)"""
+    from config import (
+        DOC_JUDGE_PROVIDER, DOC_JUDGE_UPSTAGE_MODEL,
+        DOC_JUDGE_OPENAI_MODEL, DOC_JUDGE_OLLAMA_MODEL,
+    )
+    return _build_judge_client(
+        "DOC_JUDGE_PROVIDER", DOC_JUDGE_PROVIDER,
+        DOC_JUDGE_UPSTAGE_MODEL, DOC_JUDGE_OPENAI_MODEL, DOC_JUDGE_OLLAMA_MODEL,
+    )
 
 
 def get_client():

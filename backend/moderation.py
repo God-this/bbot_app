@@ -2,18 +2,21 @@
 #
 # generate() / generate_stream() 진입점에서 가장 먼저 호출되어야 함.
 #
-# 클라이언트는 두 개로 분리되어 있다 (요구하는 API가 다르기 때문):
+# 클라이언트는 세 개로 분리되어 있다 (요구하는 API/모델 특성이 다르기 때문):
 #   - _moderation_client : 유해 콘텐츠 검사(moderations API). OpenAI 전용
 #                          엔드포인트라 대체 불가 → 항상 OPENAI_API_KEY 사용.
-#   - _guardrail_client  : 탈옥/주제/문서충분성 판단(chat.completions +
-#                          strict json_schema). GUARDRAIL_PROVIDER 설정을 따르며
-#                          Upstage 등 Structured Outputs 지원 프로바이더면 동작.
-# 둘은 독립적으로 판정된다 — 한쪽 키만 설정된 환경에서 나머지 하나는 정상 동작.
+#   - _guardrail_client  : 탈옥/주제 판단(chat.completions + strict json_schema).
+#                          GUARDRAIL_PROVIDER 설정을 따르며 Upstage 등
+#                          Structured Outputs 지원 프로바이더면 동작.
+#   - _doc_judge_client  : 문서 충분성 판단. DOC_JUDGE_PROVIDER 설정을 따른다.
+#                          입력 가드레일과 독립 — Solar는 이 판정이 과하게 엄격해
+#                          기본값은 openai.
+# 서로 독립적으로 판정된다 — 일부 키만 설정된 환경에서도 나머지는 정상 동작.
 
 import json
 from openai import OpenAI
 from config import OPENAI_API_KEY
-from llm_factory import get_guardrail_client
+from llm_factory import get_guardrail_client, get_doc_judge_client
 from logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -21,8 +24,11 @@ logger = get_logger(__name__)
 # 유해 콘텐츠 검사 전용 — OpenAI moderations API는 대체 불가
 _moderation_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
-# 가드레일 판단용 — GUARDRAIL_PROVIDER에 따라 Upstage/OpenAI/Ollama
+# 입력 가드레일 판단용 — GUARDRAIL_PROVIDER에 따라 Upstage/OpenAI/Ollama
 _guardrail_client, _GUARDRAIL_MODEL = get_guardrail_client()
+
+# 문서 충분성 판단용 — DOC_JUDGE_PROVIDER에 따라 Upstage/OpenAI/Ollama
+_doc_judge_client, _DOC_JUDGE_MODEL = get_doc_judge_client()
 
 
 # ==================== 1) OpenAI Moderation API ====================
@@ -180,7 +186,7 @@ def check_document_sufficiency(question: str, documents: list[dict]) -> tuple[bo
     검색된 문서가 질문에 답하기에 충분한지 LLM으로 판단.
     Returns: (is_sufficient, confidence, reason)
     """
-    if _guardrail_client is None or not documents:
+    if _doc_judge_client is None or not documents:
         return False, 0.0, "no_documents_or_no_api_key"
 
     snippets = "\n---\n".join(
@@ -188,8 +194,8 @@ def check_document_sufficiency(question: str, documents: list[dict]) -> tuple[bo
     )
 
     try:
-        res = _guardrail_client.chat.completions.create(
-            model=_GUARDRAIL_MODEL,
+        res = _doc_judge_client.chat.completions.create(
+            model=_DOC_JUDGE_MODEL,
             messages=[
                 {
                     "role": "system",
