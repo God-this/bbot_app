@@ -173,7 +173,9 @@ def deduplicate_docs(docs: list[dict]) -> list[dict]:
     seen = set()
     result = []
     for doc in docs:
-        key = doc.get("url") or doc.get("title", "") + str(doc.get("page", "")) + str(doc.get("start", ""))
+        # 책 문서는 url/title 없이 book/page만 가지므로 book을 키에 넣어야
+        # 서로 다른 책(book_ko/book_en)의 같은 페이지 번호가 중복으로 오인되지 않음
+        key = doc.get("url") or (doc.get("book") or doc.get("title", ""), doc.get("page"), doc.get("start"))
         if key not in seen:
             seen.add(key)
             result.append(doc)
