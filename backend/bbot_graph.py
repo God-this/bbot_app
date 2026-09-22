@@ -22,8 +22,9 @@ from llm_factory import get_client
 from bbot_web import retrieve_web_documents
 from bbot_book import retrieve_pages
 from bbot_video import retrieve_video_segments
-from utils import detect_language, translate_to_english, extract_final_answer, reasoning_kwargs
+from utils import detect_language, translate_to_english, strip_think_tags, reasoning_kwargs
 from moderation import is_safe_input, check_document_sufficiency
+from bible_tool import chat_with_tools, stream_with_tools, BIBLE_TOOL_PROMPT
 
 import re
 
@@ -612,6 +613,7 @@ def generate_node(state: GraphState) -> GraphState:
     history_text = format_chat_history(chat_history)
 
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(lang_instruction=lang_instruction)
+    system_prompt += BIBLE_TOOL_PROMPT
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -795,15 +797,14 @@ def generate(
 
     logger.debug("[Generate]")
 
-    res = client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=messages,
+    raw_answer = chat_with_tools(
+        client, LLM_MODEL, messages,
         temperature=0,
         name="generate-final-answer",
         **reasoning_kwargs(),
     )
 
-    answer = extract_final_answer(res.choices[0].message)
+    answer = strip_think_tags(raw_answer)
 
     updated_history = chat_history + [
         f"User: {question}",
@@ -931,27 +932,16 @@ def generate_stream(
 
     messages = graph_result["final_messages"]
 
-    stream = client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=messages,
+    full_answer = ""
+    for token in stream_with_tools(
+        client, LLM_MODEL, messages,
         temperature=0,
-        stream=True,
         name="generate-final-answer-stream",
         **reasoning_kwargs(),
-    )
-
-    full_answer = ""
-    for chunk in stream:
-        # stream_options={"include_usage": True}를 나중에 켜서 토큰 사용량을
-        # 트레이싱하게 되면, 마지막에 choices가 빈 청크가 하나 더 오므로
-        # 이 가드가 없으면 IndexError가 남
-        if not chunk.choices:
-            continue
-        delta = chunk.choices[0].delta.content
-        if delta:
-            full_answer += delta
-            safe = delta.replace("\n", "\\n")
-            yield f"data: {safe}\n\n"
+    ):
+        full_answer += token
+        safe = token.replace("\n", "\\n")
+        yield f"data: {safe}\n\n"
 
     sources = {
         "web_docs":   web_docs,
