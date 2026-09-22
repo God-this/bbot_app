@@ -1,17 +1,34 @@
 # 입력 검열 (OpenAI Moderation API + LLM 기반 입력 가드레일)
 #
 # generate() / generate_stream() 진입점에서 가장 먼저 호출되어야 함.
-# PROVIDER 설정(upstage/ollama)과 무관하게 항상 OpenAI Moderation API를 사용.
+#
+# 클라이언트는 세 개로 분리되어 있다 (요구하는 API/모델 특성이 다르기 때문):
+#   - _moderation_client : 유해 콘텐츠 검사(moderations API). OpenAI 전용
+#                          엔드포인트라 대체 불가 → 항상 OPENAI_API_KEY 사용.
+#   - _guardrail_client  : 탈옥/주제 판단(chat.completions + strict json_schema).
+#                          GUARDRAIL_PROVIDER 설정을 따르며 Upstage 등
+#                          Structured Outputs 지원 프로바이더면 동작.
+#   - _doc_judge_client  : 문서 충분성 판단. DOC_JUDGE_PROVIDER 설정을 따른다.
+#                          입력 가드레일과 독립 — Solar는 이 판정이 과하게 엄격해
+#                          기본값은 openai.
+# 서로 독립적으로 판정된다 — 일부 키만 설정된 환경에서도 나머지는 정상 동작.
 
 import json
 from openai import OpenAI
 from config import OPENAI_API_KEY
+from llm_factory import get_guardrail_client, get_doc_judge_client
 from logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# Moderation 전용 클라이언트 — LLM_MODEL 클라이언트(get_client())와 분리
+# 유해 콘텐츠 검사 전용 — OpenAI moderations API는 대체 불가
 _moderation_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
+# 입력 가드레일 판단용 — GUARDRAIL_PROVIDER에 따라 Upstage/OpenAI/Ollama
+_guardrail_client, _GUARDRAIL_MODEL = get_guardrail_client()
+
+# 문서 충분성 판단용 — DOC_JUDGE_PROVIDER에 따라 Upstage/OpenAI/Ollama
+_doc_judge_client, _DOC_JUDGE_MODEL = get_doc_judge_client()
 
 
 # ==================== 1) OpenAI Moderation API ====================
@@ -54,10 +71,8 @@ def check_moderation(text: str) -> tuple[bool, str]:
 # Moderation API는 "유해 콘텐츠"(폭력/성/혐오 등) 탐지용이지 탈옥 시도 자체를
 # 잡아주지 않는 경우가 많음 (DAN 프롬프트는 그 자체로 hate/violence가 아님).
 # 정규식 하드코딩 대신 구조화된 출력(JSON Schema)을 강제한 LLM 판단으로 대체.
-# PROVIDER(upstage/ollama) 설정과 무관하게 항상 _moderation_client를 사용한다 —
-# Structured Outputs 지원이 보장되는 벤더로 고정하기 위함.
-
-_GUARDRAIL_MODEL = "gpt-4o-mini"
+# 답변 생성용 PROVIDER와 무관하게 GUARDRAIL_PROVIDER 설정을 따른다 —
+# strict json_schema를 지원하는 프로바이더여야 하며, Upstage/OpenAI 모두 지원한다.
 
 _INPUT_GUARDRAIL_SCHEMA = {
     "type": "json_schema",
@@ -110,13 +125,13 @@ def check_input_guardrail(text: str) -> dict:
     Returns: {"is_jailbreak_attempt": bool, "is_on_topic": bool,
               "confidence": float, "reason": str}
     """
-    if _moderation_client is None:
-        logger.warning("[Guardrail] OPENAI_API_KEY 미설정 — 검사 스킵")
+    if _guardrail_client is None:
+        logger.warning("[Guardrail] GUARDRAIL_PROVIDER 자격증명 미설정 — 검사 스킵")
         return {"is_jailbreak_attempt": False, "is_on_topic": True,
                 "confidence": 0.0, "reason": "skipped_no_api_key"}
 
     try:
-        res = _moderation_client.chat.completions.create(
+        res = _guardrail_client.chat.completions.create(
             model=_GUARDRAIL_MODEL,
             messages=[
                 {"role": "system", "content": _INPUT_GUARDRAIL_SYSTEM_PROMPT},
@@ -171,7 +186,7 @@ def check_document_sufficiency(question: str, documents: list[dict]) -> tuple[bo
     검색된 문서가 질문에 답하기에 충분한지 LLM으로 판단.
     Returns: (is_sufficient, confidence, reason)
     """
-    if _moderation_client is None or not documents:
+    if _doc_judge_client is None or not documents:
         return False, 0.0, "no_documents_or_no_api_key"
 
     snippets = "\n---\n".join(
@@ -179,8 +194,8 @@ def check_document_sufficiency(question: str, documents: list[dict]) -> tuple[bo
     )
 
     try:
-        res = _moderation_client.chat.completions.create(
-            model=_GUARDRAIL_MODEL,
+        res = _doc_judge_client.chat.completions.create(
+            model=_DOC_JUDGE_MODEL,
             messages=[
                 {
                     "role": "system",

@@ -35,6 +35,26 @@ JUDGE_OPENAI_MODEL   = os.getenv("JUDGE_OPENAI_MODEL", OPENAI_LLM_MODEL)
 JUDGE_OLLAMA_MODEL   = os.getenv("JUDGE_OLLAMA_MODEL", OLLAMA_LLM_MODEL)
 JUDGE_OLLAMA_BASE_URL = os.getenv("JUDGE_OLLAMA_BASE_URL", OLLAMA_BASE_URL)
 
+# ==================== Guardrail Provider ====================
+# 입력 가드레일(탈옥/주제 판단)용 프로바이더.
+# 미설정 시 openai — 기존 동작(gpt-4o-mini 고정)과 호환.
+# Structured Outputs(strict json_schema)를 지원하는 프로바이더여야 한다.
+# upstage: Solar 계열 지원 확인됨 / ollama: 모델마다 다르므로 권장하지 않음.
+# 주의) 유해 콘텐츠 검사(moderations API)는 OpenAI 전용이라 이 설정과 무관하게
+#       항상 OPENAI_API_KEY를 사용한다.
+GUARDRAIL_PROVIDER      = os.getenv("GUARDRAIL_PROVIDER", "openai")
+GUARDRAIL_UPSTAGE_MODEL = os.getenv("GUARDRAIL_UPSTAGE_MODEL", UPSTAGE_LLM_MODEL)
+GUARDRAIL_OPENAI_MODEL  = os.getenv("GUARDRAIL_OPENAI_MODEL", "gpt-4o-mini")
+GUARDRAIL_OLLAMA_MODEL  = os.getenv("GUARDRAIL_OLLAMA_MODEL", OLLAMA_LLM_MODEL)
+
+# 문서 충분성 판단용 프로바이더 — 입력 가드레일과 독립적으로 설정한다.
+# 같은 문서를 판정해 본 결과 Solar가 gpt-4o-mini보다 훨씬 엄격해(창조과학 질문 5개 중
+# 충분 판정 0개 vs 3개) not_resolved → 재작성 루프가 과도하게 돌아서 기본값은 openai.
+DOC_JUDGE_PROVIDER      = os.getenv("DOC_JUDGE_PROVIDER", "openai")
+DOC_JUDGE_UPSTAGE_MODEL = os.getenv("DOC_JUDGE_UPSTAGE_MODEL", UPSTAGE_LLM_MODEL)
+DOC_JUDGE_OPENAI_MODEL  = os.getenv("DOC_JUDGE_OPENAI_MODEL", "gpt-4o-mini")
+DOC_JUDGE_OLLAMA_MODEL  = os.getenv("DOC_JUDGE_OLLAMA_MODEL", OLLAMA_LLM_MODEL)
+
 # ==================== 현재 Provider 기준 값 ====================
 if PROVIDER == "upstage":
     EMBED_DIM = UPSTAGE_EMBED_DIM
