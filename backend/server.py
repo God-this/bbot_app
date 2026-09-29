@@ -127,6 +127,7 @@ class ChatResponse(BaseModel):
     top_sources: list       = []
     images:      list[str]  = []
     session_id:  Optional[int] = None
+    message_id:  Optional[int] = None
 
 
 # ──────────────────────────────────────────────────────────
@@ -177,8 +178,9 @@ async def chat(
         top_sources = raw.get("top_sources", [])
 
         session_id = None
+        message_id = None
         try:
-            session_id = save_chat_message(
+            session_id, message_id = save_chat_message(
                 user_id    = user["user_id"],
                 question   = req.question.strip(),
                 answer     = answer,
@@ -194,6 +196,7 @@ async def chat(
             top_sources = top_sources,
             images      = image_urls,
             session_id  = session_id,
+            message_id  = message_id,
         )
 
     except Exception as e:
@@ -245,7 +248,7 @@ async def chat_stream(
         # save_chat_message는 동기 DB I/O이므로 to_thread로 빼야
         # 이벤트 루프가 블로킹되지 않음
         try:
-            session_id = await asyncio.to_thread(
+            session_id, message_id = await asyncio.to_thread(
                 save_chat_message,
                 user["user_id"],
                 req.question.strip(),
@@ -254,6 +257,7 @@ async def chat_stream(
                 req.session_id,
             )
             yield f"data: [SESSION]{session_id}\n\n"
+            yield f"data: [MESSAGE]{message_id}\n\n"
         except Exception as e:
             logger.warning("채팅 기록 저장 실패: %s", e)
 

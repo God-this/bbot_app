@@ -215,6 +215,9 @@ class _ChatScreenState extends State<ChatScreen> {
                                                 ? () => _handleSourcesTap(
                                                     context, msg.sources!)
                                                 : null,
+                                            onFeedback: (rating) =>
+                                                _handleFeedback(
+                                                    context, msg, rating),
                                           ),
                                         ],
                                       ),
@@ -419,6 +422,24 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       ],
     );
+  }
+
+  void _handleFeedback(BuildContext context, ChatMessage msg, int rating) {
+    context.read<ChatProvider>().rateMessage(msg.id, rating);
+    // 👎를 새로 선택했을 때만 상세 의견 폼을 안내한다
+    if (rating == -1 && msg.feedback != -1) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('피드백 감사합니다. 어떤 점이 아쉬웠는지 알려주세요.'),
+            action: SnackBarAction(
+              label: '자세한 의견 남기기',
+              onPressed: openFeedbackForm,
+            ),
+          ),
+        );
+    }
   }
 
   bool _isSameDay(DateTime a, DateTime b) {

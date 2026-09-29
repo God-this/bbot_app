@@ -94,6 +94,7 @@ class ChatProvider extends ChangeNotifier {
         _messages[idx] = _messages[idx].copyWith(
           sources:   result.sources,
           isLoading: false,
+          serverId:  result.messageId,
         );
       }
     } on AuthException {
@@ -178,6 +179,8 @@ class ChatProvider extends ChangeNotifier {
           isUser:    role == 'user',
           timestamp: DateTime.parse(m['created_at'] as String),
           sources:   role == 'assistant' ? _parseSourceInfo(sourcesRaw) : null,
+          serverId:  role == 'assistant' ? m['id'] as int? : null,
+          feedback:  m['feedback'] as int?,
         );
       }).toList();
       _activeSessionId = sessionId;
@@ -189,6 +192,33 @@ class ChatProvider extends ChangeNotifier {
     } finally {
       _isLoadingSession = false;
       notifyListeners();
+    }
+  }
+
+  // ─── 답변 평가 ───────────────────────────────────────────
+
+  /// 같은 값을 다시 누르면 평가를 취소한다. 실패 시 이전 값으로 되돌린다.
+  Future<void> rateMessage(String messageId, int rating) async {
+    final idx = _messages.indexWhere((m) => m.id == messageId);
+    if (idx == -1) return;
+    final msg = _messages[idx];
+    if (msg.serverId == null) return;
+
+    final previous = msg.feedback;
+    final next     = previous == rating ? null : rating;
+    _messages[idx] = msg.copyWith(feedback: () => next);
+    notifyListeners();
+
+    try {
+      await _api.sendFeedback(msg.serverId!, next);
+    } on AuthException {
+      await _auth.onUnauthorized();
+    } catch (e) {
+      final i = _messages.indexWhere((m) => m.id == messageId);
+      if (i != -1) {
+        _messages[i] = _messages[i].copyWith(feedback: () => previous);
+        notifyListeners();
+      }
     }
   }
 
