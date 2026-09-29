@@ -410,11 +410,31 @@ class _ChatScreenState extends State<ChatScreen> {
             );
           },
         ),
-        const IconButton(
-          icon: Icon(Icons.feedback_outlined, size: 22),
-          tooltip: '의견 보내기',
-          onPressed: openFeedbackForm,
-        ),
+        // 넓은 화면에선 라벨을 붙여 피드백 버튼임이 드러나게 하고,
+        // 좁은 화면에선 제목과 겹치지 않도록 아이콘만 둔다.
+        if (MediaQuery.sizeOf(context).width >= 600)
+          Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: TextButton.icon(
+              onPressed: openFeedbackForm,
+              icon: const Icon(Icons.feedback_outlined, size: 18),
+              label: const Text('의견 보내기'),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.primary,
+                backgroundColor: AppColors.primarySurface,
+                shape: const StadiumBorder(
+                  side: BorderSide(color: AppColors.divider),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+              ),
+            ),
+          )
+        else
+          const IconButton(
+            icon: Icon(Icons.feedback_outlined, size: 22),
+            tooltip: '의견 보내기',
+            onPressed: openFeedbackForm,
+          ),
         IconButton(
           icon: const Icon(Icons.logout_rounded, size: 22),
           tooltip: '로그아웃',
