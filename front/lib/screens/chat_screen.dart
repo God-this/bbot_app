@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/chat_models.dart';
 import '../theme.dart';
 import '../services/chat_provider.dart';
@@ -11,6 +12,12 @@ import '../widgets/chat_bubble.dart';
 import '../widgets/chat_input_bar.dart';
 import '../widgets/sources_sheet.dart';
 import '../widgets/history_drawer.dart';
+
+const kFeedbackFormUrl = 'https://forms.gle/27ywFtU176sxhYZQ8';
+
+void openFeedbackForm() {
+  launchUrl(Uri.parse(kFeedbackFormUrl), mode: LaunchMode.externalApplication);
+}
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -399,6 +406,11 @@ class _ChatScreenState extends State<ChatScreen> {
               },
             );
           },
+        ),
+        const IconButton(
+          icon: Icon(Icons.feedback_outlined, size: 22),
+          tooltip: '의견 보내기',
+          onPressed: openFeedbackForm,
         ),
         IconButton(
           icon: const Icon(Icons.logout_rounded, size: 22),
