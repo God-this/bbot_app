@@ -80,6 +80,7 @@ except ImportError:
 
 try:
     from eval_queue import enqueue_eval, build_contexts
+    from scripture_strip import strip_scripture
     _EVAL_QUEUE_AVAILABLE = True
 except ImportError:
     # 평가 큐를 못 불러와도 답변 생성은 정상 동작해야 한다.
@@ -722,14 +723,18 @@ def enqueue_answer_eval(cached: bool, normalized_question: str, question: str, a
 
     캐시에 없는 항목을 큐에 넣으면 배치가 mark_evaluated/delete_and_tombstone 시
     대상 키를 찾지 못하므로, tombstone으로 저장이 스킵된 경우는 제외한다.
-    enqueue_eval 내부가 fail-open이라 DB 장애가 응답을 깨뜨리지 않는다."""
+    enqueue_eval 내부가 fail-open이라 DB 장애가 응답을 깨뜨리지 않는다.
+
+    평가에는 성경 인용을 뺀 **본문만** 넘긴다. 구절은 성경 DB에서 온 것이라
+    검색 문서(web/book/video)에는 없고, faithfulness가 statement 단위로 0점을
+    매겨 멀쩡한 답변이 삭제 판정을 받는다. 사용자 응답과 캐시는 원문 그대로다."""
     if not cached or not _EVAL_QUEUE_AVAILABLE:
         return
     enqueue_eval(
         cache_key=_cache_key(normalized_question),
         normalized_question=normalized_question,
         original_question=question,
-        answer=answer,
+        answer=strip_scripture(answer),
         contexts=build_contexts(reranked_docs),
     )
 
