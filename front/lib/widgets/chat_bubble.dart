@@ -163,9 +163,10 @@ class _BotBubble extends StatelessWidget {
                       onTap: onSourcesTap,
                     ),
 
-                  // 답변 평가 버튼
+                  // 답변 평가 버튼 — 출처 수신(답변 완료) 시점부터 표시.
+                  // 서버 저장 전에 누른 평가는 provider가 보관했다가 전송한다.
                   if (!message.isLoading &&
-                      message.serverId != null &&
+                      (message.serverId != null || message.sources != null) &&
                       onFeedback != null)
                     _FeedbackBar(
                       selected: message.feedback,

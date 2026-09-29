@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../models/chat_models.dart';
@@ -96,6 +97,11 @@ class ChatProvider extends ChangeNotifier {
           isLoading: false,
           serverId:  result.messageId,
         );
+        // 저장 완료 전에 눌러 둔 평가가 있으면 이제 전송
+        final pending = _messages[idx].feedback;
+        if (pending != null && result.messageId != null) {
+          unawaited(_syncFeedback(botMsgId, result.messageId!, pending, null));
+        }
       }
     } on AuthException {
       _messages.removeWhere((m) => m.id == botMsgId || m.id == userMsg.id);
@@ -202,15 +208,21 @@ class ChatProvider extends ChangeNotifier {
     final idx = _messages.indexWhere((m) => m.id == messageId);
     if (idx == -1) return;
     final msg = _messages[idx];
-    if (msg.serverId == null) return;
 
     final previous = msg.feedback;
     final next     = previous == rating ? null : rating;
     _messages[idx] = msg.copyWith(feedback: () => next);
     notifyListeners();
 
+    // 아직 서버 저장 전이면 sendMessage가 messageId를 받은 뒤 전송한다
+    if (msg.serverId == null) return;
+    await _syncFeedback(messageId, msg.serverId!, next, previous);
+  }
+
+  Future<void> _syncFeedback(
+      String messageId, int serverId, int? rating, int? previous) async {
     try {
-      await _api.sendFeedback(msg.serverId!, next);
+      await _api.sendFeedback(serverId, rating);
     } on AuthException {
       await _auth.onUnauthorized();
     } catch (e) {
