@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../models/chat_models.dart';
@@ -94,7 +95,13 @@ class ChatProvider extends ChangeNotifier {
         _messages[idx] = _messages[idx].copyWith(
           sources:   result.sources,
           isLoading: false,
+          serverId:  result.messageId,
         );
+        // 저장 완료 전에 눌러 둔 평가가 있으면 이제 전송
+        final pending = _messages[idx].feedback;
+        if (pending != null && result.messageId != null) {
+          unawaited(_syncFeedback(botMsgId, result.messageId!, pending, null));
+        }
       }
     } on AuthException {
       _messages.removeWhere((m) => m.id == botMsgId || m.id == userMsg.id);
@@ -178,6 +185,8 @@ class ChatProvider extends ChangeNotifier {
           isUser:    role == 'user',
           timestamp: DateTime.parse(m['created_at'] as String),
           sources:   role == 'assistant' ? _parseSourceInfo(sourcesRaw) : null,
+          serverId:  role == 'assistant' ? m['id'] as int? : null,
+          feedback:  m['feedback'] as int?,
         );
       }).toList();
       _activeSessionId = sessionId;
@@ -189,6 +198,39 @@ class ChatProvider extends ChangeNotifier {
     } finally {
       _isLoadingSession = false;
       notifyListeners();
+    }
+  }
+
+  // ─── 답변 평가 ───────────────────────────────────────────
+
+  /// 같은 값을 다시 누르면 평가를 취소한다. 실패 시 이전 값으로 되돌린다.
+  Future<void> rateMessage(String messageId, int rating) async {
+    final idx = _messages.indexWhere((m) => m.id == messageId);
+    if (idx == -1) return;
+    final msg = _messages[idx];
+
+    final previous = msg.feedback;
+    final next     = previous == rating ? null : rating;
+    _messages[idx] = msg.copyWith(feedback: () => next);
+    notifyListeners();
+
+    // 아직 서버 저장 전이면 sendMessage가 messageId를 받은 뒤 전송한다
+    if (msg.serverId == null) return;
+    await _syncFeedback(messageId, msg.serverId!, next, previous);
+  }
+
+  Future<void> _syncFeedback(
+      String messageId, int serverId, int? rating, int? previous) async {
+    try {
+      await _api.sendFeedback(serverId, rating);
+    } on AuthException {
+      await _auth.onUnauthorized();
+    } catch (e) {
+      final i = _messages.indexWhere((m) => m.id == messageId);
+      if (i != -1) {
+        _messages[i] = _messages[i].copyWith(feedback: () => previous);
+        notifyListeners();
+      }
     }
   }
 

@@ -7,11 +7,13 @@ import '../models/chat_models.dart';
 class ChatBubble extends StatelessWidget {
   final ChatMessage message;
   final VoidCallback? onSourcesTap;
+  final void Function(int rating)? onFeedback;
 
   const ChatBubble({
     super.key,
     required this.message,
     this.onSourcesTap,
+    this.onFeedback,
   });
 
   @override
@@ -19,7 +21,11 @@ class ChatBubble extends StatelessWidget {
     if (message.isUser) {
       return _UserBubble(message: message);
     }
-    return _BotBubble(message: message, onSourcesTap: onSourcesTap);
+    return _BotBubble(
+      message: message,
+      onSourcesTap: onSourcesTap,
+      onFeedback: onFeedback,
+    );
   }
 }
 
@@ -66,8 +72,13 @@ class _UserBubble extends StatelessWidget {
 class _BotBubble extends StatelessWidget {
   final ChatMessage message;
   final VoidCallback? onSourcesTap;
+  final void Function(int rating)? onFeedback;
 
-  const _BotBubble({required this.message, this.onSourcesTap});
+  const _BotBubble({
+    required this.message,
+    this.onSourcesTap,
+    this.onFeedback,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -150,6 +161,16 @@ class _BotBubble extends StatelessWidget {
                     _SourceBadge(
                       sources: message.sources!,
                       onTap: onSourcesTap,
+                    ),
+
+                  // 답변 평가 버튼 — 출처 수신(답변 완료) 시점부터 표시.
+                  // 서버 저장 전에 누른 평가는 provider가 보관했다가 전송한다.
+                  if (!message.isLoading &&
+                      (message.serverId != null || message.sources != null) &&
+                      onFeedback != null)
+                    _FeedbackBar(
+                      selected: message.feedback,
+                      onSelect: onFeedback!,
                     ),
                 ],
               ),
@@ -238,6 +259,61 @@ class _SourceBadge extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ─── 답변 평가 버튼 ───────────────────────────────────
+class _FeedbackBar extends StatelessWidget {
+  final int? selected;
+  final void Function(int rating) onSelect;
+
+  const _FeedbackBar({required this.selected, required this.onSelect});
+
+  static const _options = [
+    (rating: 2, emoji: '👍👍', tooltip: '아주 좋아요'),
+    (rating: 1, emoji: '👍', tooltip: '좋아요'),
+    (rating: -1, emoji: '👎', tooltip: '아쉬워요'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (final o in _options)
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: Tooltip(
+                message: o.tooltip,
+                child: Material(
+                  color: selected == o.rating
+                      ? AppColors.primarySurface
+                      : Colors.transparent,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                    side: BorderSide(
+                      color: selected == o.rating
+                          ? AppColors.primary
+                          : AppColors.divider,
+                    ),
+                  ),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(10),
+                    onTap: () => onSelect(o.rating),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      child: Text(o.emoji, style: const TextStyle(fontSize: 14)),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

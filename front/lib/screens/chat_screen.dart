@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/chat_models.dart';
 import '../theme.dart';
 import '../services/chat_provider.dart';
@@ -11,6 +12,12 @@ import '../widgets/chat_bubble.dart';
 import '../widgets/chat_input_bar.dart';
 import '../widgets/sources_sheet.dart';
 import '../widgets/history_drawer.dart';
+
+const kFeedbackFormUrl = 'https://forms.gle/27ywFtU176sxhYZQ8';
+
+void openFeedbackForm() {
+  launchUrl(Uri.parse(kFeedbackFormUrl), mode: LaunchMode.externalApplication);
+}
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -208,6 +215,9 @@ class _ChatScreenState extends State<ChatScreen> {
                                                 ? () => _handleSourcesTap(
                                                     context, msg.sources!)
                                                 : null,
+                                            onFeedback: (rating) =>
+                                                _handleFeedback(
+                                                    context, msg, rating),
                                           ),
                                         ],
                                       ),
@@ -400,6 +410,31 @@ class _ChatScreenState extends State<ChatScreen> {
             );
           },
         ),
+        // 넓은 화면에선 라벨을 붙여 피드백 버튼임이 드러나게 하고,
+        // 좁은 화면에선 제목과 겹치지 않도록 아이콘만 둔다.
+        if (MediaQuery.sizeOf(context).width >= 600)
+          Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: TextButton.icon(
+              onPressed: openFeedbackForm,
+              icon: const Icon(Icons.feedback_outlined, size: 18),
+              label: const Text('의견 보내기'),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.primary,
+                backgroundColor: AppColors.primarySurface,
+                shape: const StadiumBorder(
+                  side: BorderSide(color: AppColors.divider),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+              ),
+            ),
+          )
+        else
+          const IconButton(
+            icon: Icon(Icons.feedback_outlined, size: 22),
+            tooltip: '의견 보내기',
+            onPressed: openFeedbackForm,
+          ),
         IconButton(
           icon: const Icon(Icons.logout_rounded, size: 22),
           tooltip: '로그아웃',
@@ -407,6 +442,24 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
       ],
     );
+  }
+
+  void _handleFeedback(BuildContext context, ChatMessage msg, int rating) {
+    context.read<ChatProvider>().rateMessage(msg.id, rating);
+    // 👎를 새로 선택했을 때만 상세 의견 폼을 안내한다
+    if (rating == -1 && msg.feedback != -1) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('피드백 감사합니다. 어떤 점이 아쉬웠는지 알려주세요.'),
+            action: SnackBarAction(
+              label: '자세한 의견 남기기',
+              onPressed: openFeedbackForm,
+            ),
+          ),
+        );
+    }
   }
 
   bool _isSameDay(DateTime a, DateTime b) {

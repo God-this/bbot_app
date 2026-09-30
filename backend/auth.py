@@ -498,7 +498,9 @@ def save_chat_message(
     sources:    dict,
     session_id: int | None = None,
 ):
-    """질문(user) + 답변(assistant)을 chat_messages에 저장합니다."""
+    """질문(user) + 답변(assistant)을 chat_messages에 저장합니다.
+    Returns: (session_id, assistant message id)
+    """
     session_id = get_or_create_session(user_id, question, session_id)
 
     with get_conn() as conn:
@@ -515,11 +517,13 @@ def save_chat_message(
             cur.execute("""
                 INSERT INTO chat_messages (session_id, role, content, sources)
                 VALUES (%s, 'assistant', %s, %s::jsonb)
+                RETURNING id
             """, (session_id, answer, json.dumps(clean_sources, ensure_ascii=False)))
+            message_id = cur.fetchone()[0]
 
             conn.commit()
 
-    return session_id
+    return session_id, message_id
 
 
 @chat_router.get("/sessions")
@@ -578,7 +582,7 @@ def get_messages(
                 raise HTTPException(status_code=403, detail="접근 권한이 없습니다.")
 
             cur.execute("""
-                SELECT id, role, content, sources, created_at
+                SELECT id, role, content, sources, created_at, feedback
                 FROM chat_messages
                 WHERE session_id = %s
                 ORDER BY created_at ASC
@@ -592,9 +596,46 @@ def get_messages(
             "content":    r[2],
             "sources":    r[3],
             "created_at": str(r[4]),
+            "feedback":   r[5],
         }
         for r in rows
     ]
+
+
+class FeedbackRequest(BaseModel):
+    # 2=👍👍, 1=👍, -1=👎, None=평가 취소
+    rating: Optional[int] = None
+
+
+@chat_router.post("/messages/{message_id}/feedback")
+def set_message_feedback(
+    message_id: int,
+    req:  FeedbackRequest,
+    user: dict = Depends(get_current_user),
+):
+    """본인 대화의 봇 답변에 평가를 저장합니다."""
+    if req.rating not in (None, -1, 1, 2):
+        raise HTTPException(status_code=400, detail="잘못된 평가 값입니다.")
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE chat_messages m
+                SET feedback = %s
+                FROM chat_sessions s
+                WHERE m.id = %s
+                  AND m.session_id = s.id
+                  AND s.user_id = %s
+                  AND m.role = 'assistant'
+                RETURNING m.id
+            """, (req.rating, message_id, user["user_id"]))
+            row = cur.fetchone()
+            conn.commit()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="메시지를 찾을 수 없습니다.")
+
+    return {"ok": True, "message_id": message_id, "rating": req.rating}
 
 
 @chat_router.delete("/sessions/{session_id}")
