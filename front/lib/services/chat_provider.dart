@@ -100,7 +100,8 @@ class ChatProvider extends ChangeNotifier {
         // 저장 완료 전에 눌러 둔 평가가 있으면 이제 전송
         final pending = _messages[idx].feedback;
         if (pending != null && result.messageId != null) {
-          unawaited(_syncFeedback(botMsgId, result.messageId!, pending, null));
+          unawaited(_syncFeedback(botMsgId, result.messageId!, pending, null,
+              comment: _pendingComments.remove(botMsgId)));
         }
       }
     } on AuthException {
@@ -204,7 +205,11 @@ class ChatProvider extends ChangeNotifier {
   // ─── 답변 평가 ───────────────────────────────────────────
 
   /// 같은 값을 다시 누르면 평가를 취소한다. 실패 시 이전 값으로 되돌린다.
-  Future<void> rateMessage(String messageId, int rating) async {
+  /// 서버 저장 전에 입력된 👎 의견 (로컬 메시지 id → comment)
+  final Map<String, String> _pendingComments = {};
+
+  Future<void> rateMessage(String messageId, int rating,
+      {String? comment}) async {
     final idx = _messages.indexWhere((m) => m.id == messageId);
     if (idx == -1) return;
     final msg = _messages[idx];
@@ -215,14 +220,23 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
 
     // 아직 서버 저장 전이면 sendMessage가 messageId를 받은 뒤 전송한다
-    if (msg.serverId == null) return;
-    await _syncFeedback(messageId, msg.serverId!, next, previous);
+    if (msg.serverId == null) {
+      if (next != null && comment != null) {
+        _pendingComments[messageId] = comment;
+      } else {
+        _pendingComments.remove(messageId);
+      }
+      return;
+    }
+    await _syncFeedback(messageId, msg.serverId!, next, previous,
+        comment: next == null ? null : comment);
   }
 
   Future<void> _syncFeedback(
-      String messageId, int serverId, int? rating, int? previous) async {
+      String messageId, int serverId, int? rating, int? previous,
+      {String? comment}) async {
     try {
-      await _api.sendFeedback(serverId, rating);
+      await _api.sendFeedback(serverId, rating, comment: comment);
     } on AuthException {
       await _auth.onUnauthorized();
     } catch (e) {

@@ -213,12 +213,12 @@ class BeBotApiService {
     }
   }
 
-  /// 봇 답변 평가 저장 (rating: 2/1/-1, null이면 취소)
-  Future<void> sendFeedback(int messageId, int? rating) async {
+  /// 봇 답변 평가 저장 (rating: 2/1/-1, null이면 취소, comment는 👎 상세 의견)
+  Future<void> sendFeedback(int messageId, int? rating, {String? comment}) async {
     final response = await http.post(
       Uri.parse('$baseUrl/api/chat/messages/$messageId/feedback'),
       headers: _headers,
-      body: jsonEncode({'rating': rating}),
+      body: jsonEncode({'rating': rating, 'comment': comment}),
     );
     if (response.statusCode == 401) throw const AuthException();
     if (response.statusCode != 200) {
