@@ -71,12 +71,20 @@ def classify_documents(docs: list[dict]) -> tuple[list[dict], list[dict], list[d
 try:
     from redis_cache import (
         get_cached_answer, search_semantic_cache, save_answer_cache,
-        get_embedding, CACHE_KEY_PREFIX,
+        get_embedding, CACHE_KEY_PREFIX, _cache_key,
         r as _redis_client, cosine_similarity as _cosine_similarity,
     )
     _REDIS_AVAILABLE = True
 except ImportError:
     _REDIS_AVAILABLE = False
+
+try:
+    from eval_queue import enqueue_eval, build_contexts
+    from scripture_strip import strip_scripture
+    _EVAL_QUEUE_AVAILABLE = True
+except ImportError:
+    # 평가 큐를 못 불러와도 답변 생성은 정상 동작해야 한다.
+    _EVAL_QUEUE_AVAILABLE = False
 
 
 client = get_client()
@@ -677,6 +685,8 @@ def lookup_answer_cache(question: str, normalized_question: str, use_cache: bool
                 if not _raw:
                     continue
                 _item = json.loads(_raw)
+                if _item.get("schema_version") != 2:
+                    continue  # 폐기된 v1 항목 — 로그에서도 스킵
                 if len(_item.get("embedding", [])) != len(_q_emb):
                     continue  # 다른 provider로 저장된 옛 데이터는 로그에서도 스킵
                 _score = _cosine_similarity([_q_emb], [_item["embedding"]])[0][0]
@@ -685,21 +695,48 @@ def lookup_answer_cache(question: str, normalized_question: str, use_cache: bool
     return None, None
 
 
-def persist_answer_cache(use_cache: bool, normalized_question: str, question: str, answer: str, sources: dict) -> None:
+def persist_answer_cache(use_cache: bool, normalized_question: str, question: str, answer: str, sources: dict) -> bool:
     """use_cache=True일 때만 캐시에 저장.
     Redis 등 캐시 저장 실패가 API 응답 자체를 실패시키면 안 되므로
-    (fail-open) 예외 처리를 이 함수 내부에서 담당한다 — 호출부는 신경 쓸 필요 없음."""
+    (fail-open) 예외 처리를 이 함수 내부에서 담당한다 — 호출부는 신경 쓸 필요 없음.
+
+    Returns: 실제로 캐시에 저장됐는지 여부 (tombstone 스킵/예외 시 False).
+    """
     if not use_cache:
-        return
+        return False
     try:
-        save_answer_cache(
+        saved = save_answer_cache(
             normalized_question,
             question,
             {"answer": answer, "sources": sources},
         )
-        logger.debug("캐시 저장 완료 — question: %s", question)
+        if saved:
+            logger.debug("캐시 저장 완료 — question: %s", question)
+        return saved
     except Exception as e:
         logger.error("캐시 저장 실패: %s", e, exc_info=True)
+        return False
+
+
+def enqueue_answer_eval(cached: bool, normalized_question: str, question: str, answer: str, reranked_docs: list[dict]) -> None:
+    """캐시에 실제로 저장된 답변만 RAGAS 평가 큐에 적재.
+
+    캐시에 없는 항목을 큐에 넣으면 배치가 mark_evaluated/delete_and_tombstone 시
+    대상 키를 찾지 못하므로, tombstone으로 저장이 스킵된 경우는 제외한다.
+    enqueue_eval 내부가 fail-open이라 DB 장애가 응답을 깨뜨리지 않는다.
+
+    평가에는 성경 인용을 뺀 **본문만** 넘긴다. 구절은 성경 DB에서 온 것이라
+    검색 문서(web/book/video)에는 없고, faithfulness가 statement 단위로 0점을
+    매겨 멀쩡한 답변이 삭제 판정을 받는다. 사용자 응답과 캐시는 원문 그대로다."""
+    if not cached or not _EVAL_QUEUE_AVAILABLE:
+        return
+    enqueue_eval(
+        cache_key=_cache_key(normalized_question),
+        normalized_question=normalized_question,
+        original_question=question,
+        answer=strip_scripture(answer),
+        contexts=build_contexts(reranked_docs),
+    )
 
 
 # ==================== Final Generate ====================
@@ -829,7 +866,8 @@ def generate(
         },
     )
 
-    persist_answer_cache(use_cache, normalized_question, question, answer, sources)
+    cached = persist_answer_cache(use_cache, normalized_question, question, answer, sources)
+    enqueue_answer_eval(cached, normalized_question, question, answer, reranked_docs)
 
     return answer, sources
 
@@ -965,10 +1003,8 @@ def generate_stream(
     yield "data: [DONE]\n\n"
     yield f"data: [SOURCES]{json.dumps(sources, ensure_ascii=False)}\n\n"
 
-    # ---------- 캐시 저장 ----------
-    if use_cache:
-        try:
-            save_answer_cache(normalized_question, question, {"answer": full_answer, "sources": sources})
-            logger.debug("캐시 저장 완료 — question: %s", question)
-        except Exception as e:
-            logger.error("캐시 저장 실패: %s", e, exc_info=True)
+    # ---------- 캐시 저장 + 평가 큐 적재 ----------
+    # 이 시점엔 이미 [DONE]/[SOURCES]를 내보낸 뒤라 사용자 응답은 완결된 상태다.
+    # 두 작업 모두 fail-open이므로 실패해도 스트림에 영향을 주지 않는다.
+    cached = persist_answer_cache(use_cache, normalized_question, question, full_answer, sources)
+    enqueue_answer_eval(cached, normalized_question, question, full_answer, reranked_docs)
