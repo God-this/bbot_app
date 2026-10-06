@@ -444,22 +444,49 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  void _handleFeedback(BuildContext context, ChatMessage msg, int rating) {
-    context.read<ChatProvider>().rateMessage(msg.id, rating);
-    // 👎를 새로 선택했을 때만 상세 의견 폼을 안내한다
+  Future<void> _handleFeedback(
+      BuildContext context, ChatMessage msg, int rating) async {
+    final provider = context.read<ChatProvider>();
+    // 👎를 새로 선택할 때만 상세 의견을 입력받는다 (취소 시 평가하지 않음)
     if (rating == -1 && msg.feedback != -1) {
-      ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
-        ..showSnackBar(
-          const SnackBar(
-            content: Text('피드백 감사합니다. 어떤 점이 아쉬웠는지 알려주세요.'),
-            action: SnackBarAction(
-              label: '자세한 의견 남기기',
-              onPressed: openFeedbackForm,
-            ),
-          ),
-        );
+      final comment = await _showFeedbackDialog(context);
+      if (comment == null) return;
+      await provider.rateMessage(msg.id, rating, comment: comment);
+      return;
     }
+    await provider.rateMessage(msg.id, rating);
+  }
+
+  /// 👎 상세 의견 입력 다이얼로그 — 보내기 시 입력값(빈 문자열 가능), 취소 시 null
+  Future<String?> _showFeedbackDialog(BuildContext context) {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('어떤 점이 아쉬웠나요?'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLines: 4,
+          maxLength: 2000,
+          decoration: const InputDecoration(
+            hintText: '답변에서 부족하거나 틀린 점을 알려주세요. (선택)',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, controller.text.trim()),
+            child: const Text('보내기'),
+          ),
+        ],
+      ),
+    ).whenComplete(controller.dispose);
   }
 
   bool _isSameDay(DateTime a, DateTime b) {
