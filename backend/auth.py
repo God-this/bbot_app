@@ -208,6 +208,7 @@ async def google_login(req: GoogleLoginRequest):
     return {
         "access_token": token,
         "token_type":   "bearer",
+        "provider":     "google",
         "user_id":      user["id"],
         "role":         user["role"],
         "nickname":     user["nickname"],
@@ -242,6 +243,7 @@ async def guest_login(req: GuestLoginRequest):
     return {
         "access_token": token,
         "token_type":   "bearer",
+        "provider":     "guest",
         "user_id":      user["id"],
         "role":         user["role"],
         "nickname":     user["nickname"],
@@ -292,6 +294,7 @@ async def _naver_login_with_access_token(access_token: str) -> dict:
     return {
         "access_token": token,
         "token_type":   "bearer",
+        "provider":     "naver",
         "user_id":      user["id"],
         "role":         user["role"],
         "nickname":     user["nickname"],
@@ -378,6 +381,7 @@ async def _kakao_login_with_access_token(access_token: str) -> dict:
     return {
         "access_token": token,
         "token_type":   "bearer",
+        "provider":     "kakao",
         "user_id":      user["id"],
         "role":         user["role"],
         "nickname":     user["nickname"],

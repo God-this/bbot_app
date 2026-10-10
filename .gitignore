@@ -3,3 +3,8 @@
 venv/*
 venv/
 backend/requirements_mac.txt
+
+# 로컬 테스트/평가 산출물
+backend/bible.txt
+backend/*eval_data.xlsx
+backend/bible_test_logs/
