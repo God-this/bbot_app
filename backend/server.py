@@ -127,6 +127,7 @@ class ChatResponse(BaseModel):
     top_sources: list       = []
     images:      list[str]  = []
     session_id:  Optional[int] = None
+    message_id:  Optional[int] = None
 
 
 # ──────────────────────────────────────────────────────────
@@ -177,8 +178,9 @@ async def chat(
         top_sources = raw.get("top_sources", [])
 
         session_id = None
+        message_id = None
         try:
-            session_id = save_chat_message(
+            session_id, message_id = save_chat_message(
                 user_id    = user["user_id"],
                 question   = req.question.strip(),
                 answer     = answer,
@@ -194,6 +196,7 @@ async def chat(
             top_sources = top_sources,
             images      = image_urls,
             session_id  = session_id,
+            message_id  = message_id,
         )
 
     except Exception as e:
@@ -214,10 +217,36 @@ async def chat_stream(
     from bbot_graph import generate_stream
 
     async def event_generator():
-        gen = generate_stream(req.question.strip(), thread_id=f"user_{user['user_id']}")
+        gen = generate_stream(
+            req.question.strip(),
+            thread_id=str(user["user_id"]),
+            user_id=str(user["user_id"]),
+            source="api",
+        )
 
         full_answer = ""
         sources_raw = {}
+        saved = False
+
+        async def save_and_notify():
+            # save_chat_message는 동기 DB I/O이므로 to_thread로 빼야
+            # 이벤트 루프가 블로킹되지 않음
+            try:
+                session_id, message_id = await asyncio.to_thread(
+                    save_chat_message,
+                    user["user_id"],
+                    req.question.strip(),
+                    full_answer,
+                    sources_raw,
+                    req.session_id,
+                )
+                return (
+                    f"data: [SESSION]{session_id}\n\n"
+                    f"data: [MESSAGE]{message_id}\n\n"
+                )
+            except Exception as e:
+                logger.warning("채팅 기록 저장 실패: %s", e)
+                return ""
 
         for chunk in gen:
             if chunk.startswith("data: [SOURCES]"):
@@ -227,7 +256,7 @@ async def chat_stream(
                 except Exception:
                     pass
             elif chunk.startswith("data: [DONE]"):
-                # [SOURCES]는 [DONE] 뒤에 오므로, 저장은 스트림 종료 후로 미룸
+                # [SOURCES]는 [DONE] 뒤에 오므로, 저장은 출처 수신 후로 미룸
                 pass
             else:
                 token = chunk.replace("data: ", "").replace("\n\n", "")
@@ -236,21 +265,20 @@ async def chat_stream(
             yield chunk
             await asyncio.sleep(0)
 
-        # 모든 청크 수신 완료 → 출처까지 포함해 저장
-        # save_chat_message는 동기 DB I/O이므로 to_thread로 빼야
-        # 이벤트 루프가 블로킹되지 않음
-        try:
-            session_id = await asyncio.to_thread(
-                save_chat_message,
-                user["user_id"],
-                req.question.strip(),
-                full_answer,
-                sources_raw,
-                req.session_id,
-            )
-            yield f"data: [SESSION]{session_id}\n\n"
-        except Exception as e:
-            logger.warning("채팅 기록 저장 실패: %s", e)
+            # [SOURCES] 이후 generate_stream은 답변 캐시 저장(임베딩, 수 초)만 남으므로
+            # 기다리지 않고 바로 기록을 저장해 [MESSAGE]를 먼저 보낸다.
+            if chunk.startswith("data: [SOURCES]") and not saved:
+                saved = True
+                yield await save_and_notify()
+                # 남은 구간(캐시 저장)을 여기서 동기로 돌리면 이벤트 루프가 막혀
+                # 방금 보낸 [MESSAGE]가 flush되지 못하므로 스레드에서 소진한다.
+                for rest in await asyncio.to_thread(list, gen):
+                    yield rest
+                break
+
+        # 차단 응답처럼 [SOURCES]가 오지 않은 경우엔 스트림 종료 후 저장
+        if not saved:
+            yield await save_and_notify()
 
     return StreamingResponse(
         event_generator(),

@@ -72,7 +72,7 @@ class BeBotApiService {
   }
 
   /// 스트리밍 질문 전송 — 토큰을 onToken 콜백으로 실시간 전달
-  Future<({SourceInfo sources, int? sessionId})> sendQuestionStream(
+  Future<({SourceInfo sources, int? sessionId, int? messageId})> sendQuestionStream(
     String question, {
     int? sessionId,
     required void Function(String token) onToken,
@@ -94,11 +94,20 @@ class BeBotApiService {
 
     SourceInfo sources = SourceInfo();
     int? newSessionId;
+    int? messageId;
 
+    // 서버는 토큰 → [DONE] → [SOURCES] → [SESSION] 순으로 보내고,
+    // 그 뒤 캐시 저장(임베딩 API 호출, 수 초)을 마친 다음에야 연결을 닫는다.
+    // 연결 종료를 기다리면 답변이 끝난 뒤에도 입력창이 묶이므로,
+    // 답변에 필요한 이벤트를 모두 받은 시점에 곧바로 완료 처리한다.
     final completer = Completer<void>();
     final buffer = StringBuffer();
+    void finish() {
+      if (!completer.isCompleted) completer.complete();
+    }
 
-    streamedResponse.stream.transform(utf8.decoder).listen(
+    late final StreamSubscription<String> subscription;
+    subscription = streamedResponse.stream.transform(utf8.decoder).listen(
       (chunk) {
         buffer.write(chunk);
         final raw = buffer.toString();
@@ -113,7 +122,7 @@ class BeBotApiService {
           final data = event.replaceFirst('data: ', '');
 
           if (data == '[DONE]') {
-            // 완료 신호
+            // 이후 [SOURCES]·[SESSION]·[MESSAGE]가 더 온다.
           } else if (data.startsWith('[SOURCES]')) {
             final jsonStr = data.replaceFirst('[SOURCES]', '');
             try {
@@ -124,17 +133,31 @@ class BeBotApiService {
             } catch (_) {}
           } else if (data.startsWith('[SESSION]')) {
             newSessionId = int.tryParse(data.replaceFirst('[SESSION]', ''));
+          } else if (data.startsWith('[MESSAGE]')) {
+            // 답변 저장이 끝났다는 마지막 이벤트 — 캐시 저장을 기다리지 않는다.
+            // (차단 응답·저장 실패 시엔 오지 않으므로 onDone에서 풀린다)
+            messageId = int.tryParse(data.replaceFirst('[MESSAGE]', ''));
+            finish();
           } else {
             onToken(data.replaceAll('\\n', '\n'));
           }
         }
       },
-      onDone: () => completer.complete(),
-      onError: (e) => completer.completeError(e),
+      // 연결이 먼저 닫히는 경우(오류·조기 종료)에도 대기를 풀어준다.
+      onDone: finish,
+      onError: (e) {
+        if (!completer.isCompleted) completer.completeError(e);
+      },
+      cancelOnError: true,
     );
 
-    await completer.future;
-    return (sources: sources, sessionId: newSessionId);
+    try {
+      await completer.future;
+    } finally {
+      // 남은 캐시 저장 구간을 기다리지 않고 연결을 정리한다.
+      unawaited(subscription.cancel());
+    }
+    return (sources: sources, sessionId: newSessionId, messageId: messageId);
   }
 
   SourceInfo _parseSourceInfoFromMap(Map<String, dynamic> map) {
@@ -187,6 +210,19 @@ class BeBotApiService {
       rethrow;
     } catch (e) {
       throw Exception('네트워크 오류: $e');
+    }
+  }
+
+  /// 봇 답변 평가 저장 (rating: 2/1/-1, null이면 취소, comment는 👎 상세 의견)
+  Future<void> sendFeedback(int messageId, int? rating, {String? comment}) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/chat/messages/$messageId/feedback'),
+      headers: _headers,
+      body: jsonEncode({'rating': rating, 'comment': comment}),
+    );
+    if (response.statusCode == 401) throw const AuthException();
+    if (response.statusCode != 200) {
+      throw Exception('서버 오류: ${response.statusCode}');
     }
   }
 

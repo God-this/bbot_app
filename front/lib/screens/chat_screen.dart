@@ -1,6 +1,8 @@
 // 메인 채팅 화면
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/chat_models.dart';
 import '../theme.dart';
 import '../services/chat_provider.dart';
@@ -11,6 +13,12 @@ import '../widgets/chat_input_bar.dart';
 import '../widgets/sources_sheet.dart';
 import '../widgets/history_drawer.dart';
 
+const kFeedbackFormUrl = 'https://forms.gle/27ywFtU176sxhYZQ8';
+
+void openFeedbackForm() {
+  launchUrl(Uri.parse(kFeedbackFormUrl), mode: LaunchMode.externalApplication);
+}
+
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
 
@@ -19,8 +27,34 @@ class ChatScreen extends StatefulWidget {
 }
 
 class _ChatScreenState extends State<ChatScreen> {
+  static const _drawerMinWidth  = 240.0;
+  static const _drawerMaxWidth  = 420.0;
+  static const _drawerWidthPrefKey = 'history_drawer_width';
+
   final _scrollController = ScrollController();
   SourceInfo? _selectedSources;
+
+  /// 사용자가 드래그로 지정한 드로어 폭 (null이면 화면 크기 기반 기본값)
+  double? _userDrawerWidth;
+
+  @override
+  void initState() {
+    super.initState();
+    _restoreDrawerWidth();
+  }
+
+  Future<void> _restoreDrawerWidth() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getDouble(_drawerWidthPrefKey);
+    if (saved != null && mounted) {
+      setState(() => _userDrawerWidth = saved);
+    }
+  }
+
+  Future<void> _persistDrawerWidth(double width) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_drawerWidthPrefKey, width);
+  }
 
   @override
   void dispose() {
@@ -48,14 +82,54 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  /// 화면 크기에 맞춘 드로어 기본 폭
+  /// - 모바일: 화면 비율 기반이되 최대 320px
+  /// - 태블릿/데스크톱: 고정 폭
+  double _defaultDrawerWidth(BuildContext context) {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    if (screenWidth < 600) {
+      return (screenWidth * 0.85).clamp(0.0, 320.0);
+    }
+    return 300;
+  }
+
+  /// 현재 적용할 드로어 폭
+  /// 사용자가 드래그로 조정한 값이 있으면 그 값을, 없으면 기본값을 쓴다.
+  /// 어느 쪽이든 화면을 넘지 않도록 허용 범위 안으로 제한한다.
+  double _drawerWidth(BuildContext context) {
+    final width = _userDrawerWidth ?? _defaultDrawerWidth(context);
+    return width.clamp(_drawerMinWidth, _maxDrawerWidth(context));
+  }
+
+  /// 좁은 화면에서 드로어가 본문을 완전히 덮지 않도록 상한을 낮춘다.
+  double _maxDrawerWidth(BuildContext context) {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final limit = screenWidth * 0.85;
+    return limit < _drawerMinWidth
+        ? _drawerMinWidth
+        : (limit < _drawerMaxWidth ? limit : _drawerMaxWidth);
+  }
+
+  void _handleDrawerResize(BuildContext context, double deltaX) {
+    final next = (_drawerWidth(context) + deltaX)
+        .clamp(_drawerMinWidth, _maxDrawerWidth(context));
+    if (next != _userDrawerWidth) {
+      setState(() => _userDrawerWidth = next);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: _buildAppBar(context),
       drawer: Drawer(
-        width: MediaQuery.sizeOf(context).width * 0.85,
-        child: HistoryDrawer(
-          onSessionLoaded: () => setState(() => _selectedSources = null),
+        width: _drawerWidth(context),
+        child: _ResizableDrawerContent(
+          onResize: (deltaX) => _handleDrawerResize(context, deltaX),
+          onResizeEnd: () => _persistDrawerWidth(_drawerWidth(context)),
+          child: HistoryDrawer(
+            onSessionLoaded: () => setState(() => _selectedSources = null),
+          ),
         ),
       ),
       onDrawerChanged: (isOpened) {
@@ -73,6 +147,26 @@ class _ChatScreenState extends State<ChatScreen> {
                       // 채팅 영역
                       Expanded(
                         child: Builder(builder: (context) {
+                          // 이전 대화를 불러오는 중에는 본문에 진행 표시를 둔다.
+                          // (드로어는 이미 닫힌 뒤라 드로어 안의 표시는 보이지 않는다)
+                          if (chat.isLoadingSession) {
+                            return const Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  CircularProgressIndicator(),
+                                  SizedBox(height: 16),
+                                  Text(
+                                    '대화를 불러오는 중...',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      color: AppColors.textSecondary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }
                           if (!chat.hasMessages) {
                             return WelcomeView(
                               suggestions: chat.suggestedQuestions,
@@ -92,8 +186,8 @@ class _ChatScreenState extends State<ChatScreen> {
                                   .copyWith(scrollbars: false),
                               child: ListView.builder(
                                 controller: _scrollController,
-                                padding: const EdgeInsets.symmetric(
-                                    vertical: 16),
+                                padding: const EdgeInsets.fromLTRB(
+                                    0, 16, 0, 8),
                                 itemCount: chat.messages.length,
                                 itemBuilder: (context, index) {
                                   final msg = chat.messages[index];
@@ -121,6 +215,9 @@ class _ChatScreenState extends State<ChatScreen> {
                                                 ? () => _handleSourcesTap(
                                                     context, msg.sources!)
                                                 : null,
+                                            onFeedback: (rating) =>
+                                                _handleFeedback(
+                                                    context, msg, rating),
                                           ),
                                         ],
                                       ),
@@ -313,6 +410,31 @@ class _ChatScreenState extends State<ChatScreen> {
             );
           },
         ),
+        // 넓은 화면에선 라벨을 붙여 피드백 버튼임이 드러나게 하고,
+        // 좁은 화면에선 제목과 겹치지 않도록 아이콘만 둔다.
+        if (MediaQuery.sizeOf(context).width >= 600)
+          Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: TextButton.icon(
+              onPressed: openFeedbackForm,
+              icon: const Icon(Icons.feedback_outlined, size: 18),
+              label: const Text('의견 보내기'),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.primary,
+                backgroundColor: AppColors.primarySurface,
+                shape: const StadiumBorder(
+                  side: BorderSide(color: AppColors.divider),
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+              ),
+            ),
+          )
+        else
+          const IconButton(
+            icon: Icon(Icons.feedback_outlined, size: 22),
+            tooltip: '의견 보내기',
+            onPressed: openFeedbackForm,
+          ),
         IconButton(
           icon: const Icon(Icons.logout_rounded, size: 22),
           tooltip: '로그아웃',
@@ -322,12 +444,122 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Future<void> _handleFeedback(
+      BuildContext context, ChatMessage msg, int rating) async {
+    final provider = context.read<ChatProvider>();
+    // 👎를 새로 선택할 때만 상세 의견을 입력받는다 (취소 시 평가하지 않음)
+    if (rating == -1 && msg.feedback != -1) {
+      final comment = await _showFeedbackDialog(context);
+      if (comment == null) return;
+      await provider.rateMessage(msg.id, rating, comment: comment);
+      return;
+    }
+    await provider.rateMessage(msg.id, rating);
+  }
+
+  /// 👎 상세 의견 입력 다이얼로그 — 보내기 시 입력값(빈 문자열 가능), 취소 시 null
+  Future<String?> _showFeedbackDialog(BuildContext context) {
+    final controller = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('어떤 점이 아쉬웠나요?'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLines: 4,
+          maxLength: 2000,
+          decoration: const InputDecoration(
+            hintText: '답변에서 부족하거나 틀린 점을 알려주세요. (선택)',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, controller.text.trim()),
+            child: const Text('보내기'),
+          ),
+        ],
+      ),
+    ).whenComplete(controller.dispose);
+  }
+
   bool _isSameDay(DateTime a, DateTime b) {
     return a.year == b.year && a.month == b.month && a.day == b.day;
   }
 }
 
 // ─── 날짜 구분선 ──────────────────────────────────────
+// ─── 드로어 폭 조절 핸들 ──────────────────────────────────
+
+/// 드로어 오른쪽 가장자리에 드래그 핸들을 얹어 폭을 조절할 수 있게 한다.
+class _ResizableDrawerContent extends StatefulWidget {
+  final Widget child;
+  final void Function(double deltaX) onResize;
+  final VoidCallback onResizeEnd;
+
+  const _ResizableDrawerContent({
+    required this.child,
+    required this.onResize,
+    required this.onResizeEnd,
+  });
+
+  @override
+  State<_ResizableDrawerContent> createState() =>
+      _ResizableDrawerContentState();
+}
+
+class _ResizableDrawerContentState extends State<_ResizableDrawerContent> {
+  bool _hovered = false;
+  bool _dragging = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = _hovered || _dragging;
+
+    return Stack(
+      children: [
+        Positioned.fill(child: widget.child),
+        Positioned(
+          top: 0,
+          bottom: 0,
+          right: 0,
+          width: 12,
+          child: MouseRegion(
+            cursor: SystemMouseCursors.resizeLeftRight,
+            onEnter: (_) => setState(() => _hovered = true),
+            onExit: (_) => setState(() => _hovered = false),
+            child: GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onHorizontalDragStart: (_) => setState(() => _dragging = true),
+              onHorizontalDragUpdate: (d) => widget.onResize(d.delta.dx),
+              onHorizontalDragEnd: (_) {
+                setState(() => _dragging = false);
+                widget.onResizeEnd();
+              },
+              onHorizontalDragCancel: () => setState(() => _dragging = false),
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 120),
+                  width: active ? 3 : 1,
+                  height: double.infinity,
+                  color: active ? AppColors.primaryDark : AppColors.divider,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _DateDivider extends StatelessWidget {
   final DateTime date;
   const _DateDivider({required this.date});

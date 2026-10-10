@@ -498,7 +498,9 @@ def save_chat_message(
     sources:    dict,
     session_id: int | None = None,
 ):
-    """질문(user) + 답변(assistant)을 chat_messages에 저장합니다."""
+    """질문(user) + 답변(assistant)을 chat_messages에 저장합니다.
+    Returns: (session_id, assistant message id)
+    """
     session_id = get_or_create_session(user_id, question, session_id)
 
     with get_conn() as conn:
@@ -515,11 +517,13 @@ def save_chat_message(
             cur.execute("""
                 INSERT INTO chat_messages (session_id, role, content, sources)
                 VALUES (%s, 'assistant', %s, %s::jsonb)
+                RETURNING id
             """, (session_id, answer, json.dumps(clean_sources, ensure_ascii=False)))
+            message_id = cur.fetchone()[0]
 
             conn.commit()
 
-    return session_id
+    return session_id, message_id
 
 
 @chat_router.get("/sessions")
@@ -562,6 +566,8 @@ def get_messages(
     user: dict = Depends(get_current_user),
 ):
     """세션의 메시지 목록을 시간순으로 반환합니다."""
+    # 소유자 확인과 메시지 조회를 하나의 커넥션에서 처리한다.
+    # (연결을 두 번 열면 그만큼 접속 왕복이 늘어 응답이 느려진다)
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -570,15 +576,13 @@ def get_messages(
             )
             row = cur.fetchone()
 
-    if not row:
-        raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
-    if row[0] != user["user_id"]:
-        raise HTTPException(status_code=403, detail="접근 권한이 없습니다.")
+            if not row:
+                raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
+            if row[0] != user["user_id"]:
+                raise HTTPException(status_code=403, detail="접근 권한이 없습니다.")
 
-    with get_conn() as conn:
-        with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, role, content, sources, created_at
+                SELECT id, role, content, sources, created_at, feedback
                 FROM chat_messages
                 WHERE session_id = %s
                 ORDER BY created_at ASC
@@ -592,9 +596,61 @@ def get_messages(
             "content":    r[2],
             "sources":    r[3],
             "created_at": str(r[4]),
+            "feedback":   r[5],
         }
         for r in rows
     ]
+
+
+class FeedbackRequest(BaseModel):
+    # 2=👍👍, 1=👍, -1=👎, None=평가 취소
+    rating:  Optional[int] = None
+    # 👎 선택 시 입력한 상세 의견
+    comment: Optional[str] = None
+
+
+@chat_router.post("/messages/{message_id}/feedback")
+def set_message_feedback(
+    message_id: int,
+    req:  FeedbackRequest,
+    user: dict = Depends(get_current_user),
+):
+    """본인 대화의 봇 답변에 평가를 저장합니다.
+    chat_messages.feedback은 현재 선택 상태로 갱신하고,
+    평가할 때마다 message_feedback에 새 row를 남깁니다(취소는 기록하지 않음).
+    """
+    if req.rating not in (None, -1, 1, 2):
+        raise HTTPException(status_code=400, detail="잘못된 평가 값입니다.")
+
+    comment = (req.comment or "").strip()[:2000] if req.rating == -1 else ""
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE chat_messages m
+                SET feedback = %s
+                FROM chat_sessions s
+                WHERE m.id = %s
+                  AND m.session_id = s.id
+                  AND s.user_id = %s
+                  AND m.role = 'assistant'
+                RETURNING m.id, m.session_id
+            """, (req.rating, message_id, user["user_id"]))
+            row = cur.fetchone()
+
+            if row and req.rating is not None:
+                cur.execute("""
+                    INSERT INTO message_feedback
+                        (session_id, message_id, user_id, rating, comment)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (row[1], row[0], user["user_id"], req.rating, comment or None))
+
+            conn.commit()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="메시지를 찾을 수 없습니다.")
+
+    return {"ok": True, "message_id": message_id, "rating": req.rating}
 
 
 @chat_router.delete("/sessions/{session_id}")

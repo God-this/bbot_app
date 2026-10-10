@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../models/auth_models.dart';
 import '../models/chat_models.dart';
+import '../services/auth_provider.dart';
 import '../services/chat_provider.dart';
 import '../theme.dart';
 
@@ -12,6 +14,7 @@ class HistoryDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final auth = context.watch<AuthProvider>();
     return Consumer<ChatProvider>(
       builder: (context, chat, _) {
         return Column(
@@ -31,13 +34,22 @@ class HistoryDrawer extends StatelessWidget {
                   activeSessionId: chat.activeSessionId,
                   isLoading:       chat.isLoadingSession,
                   onTap: (id) {
-                    Navigator.of(context).pop();
+                    // 이미 열려 있는 세션이면 다시 불러오지 않는다.
+                    if (id == chat.activeSessionId) {
+                      Navigator.of(context).pop();
+                      return;
+                    }
+                    // 드로어를 닫기 전에 로딩을 시작해야
+                    // 본문의 진행 표시가 곧바로 나타난다.
                     chat.loadSession(id);
+                    Navigator.of(context).pop();
                     onSessionLoaded?.call();
                   },
                   onDelete: (session) => _confirmDelete(context, chat, session),
                 ),
               ),
+            const Divider(height: 1, color: AppColors.divider),
+            _UserInfoFooter(user: auth.user, isGuest: auth.isGuest),
           ],
         );
       },
@@ -68,6 +80,75 @@ class HistoryDrawer extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ─── 하단 유저 정보 ───────────────────────────────────────
+
+class _UserInfoFooter extends StatelessWidget {
+  final UserInfo? user;
+  final bool isGuest;
+
+  const _UserInfoFooter({required this.user, required this.isGuest});
+
+  @override
+  Widget build(BuildContext context) {
+    final rawNickname = user?.nickname ?? '';
+    final nickname    = rawNickname.isNotEmpty ? rawNickname : '게스트';
+    final rawEmail    = user?.email ?? '';
+    final email       = rawEmail.isNotEmpty ? rawEmail : (isGuest ? '게스트 사용자' : '');
+
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 16,
+              backgroundColor: AppColors.primarySurface,
+              child: Text(
+                nickname.characters.first,
+                style: const TextStyle(
+                  color: AppColors.primaryDark,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    nickname,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  if (email.isNotEmpty)
+                    Text(
+                      email,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
