@@ -1,0 +1,12 @@
+**/.env
+**/venv*/
+**/__pycache__/
+**/*.pyc
+**/*.log
+**/.DS_Store
+**/.claude/
+.git/
+backend/dump.rdb
+front/
+FETCH_HEAD
+*.md%
