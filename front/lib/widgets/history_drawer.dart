@@ -96,7 +96,7 @@ class _UserInfoFooter extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final rawNickname = user?.nickname ?? '';
-    final nickname    = rawNickname.isNotEmpty ? rawNickname : '게스트';
+    final nickname    = rawNickname.isNotEmpty ? rawNickname : (isGuest ? '게스트' : '사용자');
     final rawEmail    = user?.email ?? '';
     final email       = rawEmail.isNotEmpty ? rawEmail : (isGuest ? '게스트 사용자' : '');
 
