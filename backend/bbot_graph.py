@@ -266,7 +266,7 @@ def retrieve_documents(state: GraphState) -> GraphState:
 #     즉 judge_stage1은 사실상 "완전히 무관한 것만 제거"하는 역할이고,
 #     실제 관련도 판단은 rerank_score(judge_stage2)에서 이뤄지도록 한다.
 #   - 실측 후에는 타입별로(web/book/video) 분리해 조정한다.
-JUDGE_STAGE1_THRESHOLD = 0.5
+JUDGE_STAGE1_THRESHOLD = 0.3
 
 
 def judge_stage1(state: GraphState) -> GraphState:
@@ -299,31 +299,29 @@ def judge_stage1(state: GraphState) -> GraphState:
 
 
 # judge_stage2: rerank 결과가 질문에 답하기 충분한지를 구조화된 출력으로 판정.
-# "문서 존재 여부"가 아니라 "문서 충분성"을 보므로 not_resolved(→rewrite) 비율이
-# 이전보다 높아질 수 있다. rewrite는 iteration < 2로 제한되어 무한 루프는 없음.
+# sufficient/partial이면 resolved, 자료가 질문과 무관한 insufficient일 때만 not_resolved(→rewrite).
 def judge_stage2(state: GraphState) -> GraphState:
     """reranked_documents를 대상으로 LLM 콜 1회로 문서 충분성을 판정."""
     logger.debug("[Judge Stage2]")
 
     docs = state.get("reranked_documents", [])
-    question = state.get("rewritten_question") or state["question"]
+    # 판정은 원 질문 기준 (재작성 질문은 보조 정보로만 전달)
+    question = state["question"]
+    rewritten_question = state.get("rewritten_question", "")
 
     if not docs:
         logger.warning("[Judge Stage2] reranked_documents 없음 → not_resolved")
         judgement = "not_resolved"
-        sufficient, confidence, reason = False, 0.0, "no_documents"
+        sufficiency, reason = "insufficient", "no_documents"
     else:
         # 텍스트 파싱("true" in answer) 대신 JSON Schema를 강제한 구조화된 출력으로 판정
-        sufficient, confidence, reason = check_document_sufficiency(question, docs)
-        judgement = "resolved" if sufficient else "not_resolved"
-        logger.debug(
-            "[Judge Stage2] sufficient=%s confidence=%.2f reason=%s",
-            sufficient, confidence, reason,
-        )
+        sufficiency, reason = check_document_sufficiency(question, docs, rewritten_question)
+        judgement = "not_resolved" if sufficiency == "insufficient" else "resolved"
+        logger.debug("[Judge Stage2] sufficiency=%s reason=%s", sufficiency, reason)
 
     get_langfuse_client().update_current_span(
         input={"question": question, "document_count": len(docs)},
-        output={"judgement": judgement, "confidence": confidence, "reason": reason},
+        output={"judgement": judgement, "sufficiency": sufficiency, "reason": reason},
     )
 
     return {**state, "judgement": judgement}
@@ -387,10 +385,10 @@ def rewrite_question(state: GraphState) -> GraphState:
 
 # ==================== Conditional Edges ====================
 # 재시도 카운터(iteration)는 stage1/stage2가 공유한다 — 전체 그래프 실행에서
-# rewrite는 최대 2회만 허용
+# rewrite는 최대 1회만 허용 (반복할수록 지연만 늘고 결과 개선 폭은 작음)
 # 별도 카운터로 분리하지 않는 이유: 분리 시 rerank 실행 횟수·왕복 단계 수가
 # 최악의 경우 예측하기 어려워지기 때문 (rerank 반복 비용에 대한 근거는 문서 4-3 참고).
-MAX_REWRITE_ITERATIONS = 2
+MAX_REWRITE_ITERATIONS = 1
 
 
 def decide_stage1(state: GraphState) -> Literal["rerank", "rewrite", "fallback"]:
@@ -414,6 +412,12 @@ def decide_stage2(state: GraphState) -> Literal["generate", "rewrite", "fallback
     if state.get("iteration", 0) < MAX_REWRITE_ITERATIONS:
         logger.debug("[Decision Stage2] → rewrite")
         return "rewrite"
+
+    # 재시도를 소진해도 rerank 문서가 남아 있으면 거절 대신 자료 범위 내에서 답변 생성
+    # (시스템 프롬프트가 자료 우선 원칙을 이미 강제함). fallback은 문서가 아예 없을 때만.
+    if state.get("reranked_documents"):
+        logger.debug("[Decision Stage2] 재시도 소진, 문서 존재 → generate")
+        return "generate"
 
     logger.debug("[Decision Stage2] → fallback")
     return "fallback"

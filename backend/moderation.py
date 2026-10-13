@@ -151,58 +151,73 @@ _DOC_JUDGE_SCHEMA = {
         "schema": {
             "type": "object",
             "properties": {
-                "is_sufficient": {
-                    "type": "boolean",
-                    "description": "검색된 자료만으로 질문에 신뢰성 있게 답할 수 있는가",
+                "sufficiency": {
+                    "type": "string",
+                    "enum": ["sufficient", "partial", "insufficient"],
+                    "description": (
+                        "sufficient=충분히 답할 수 있음, partial=일부라도 답할 근거가 있음, "
+                        "insufficient=자료가 질문과 무관함"
+                    ),
                 },
-                "confidence": {"type": "number"},
                 "reason": {"type": "string"},
             },
-            "required": ["is_sufficient", "confidence", "reason"],
+            "required": ["sufficiency", "reason"],
             "additionalProperties": False,
         },
     },
 }
 
+_DOC_JUDGE_SYSTEM_PROMPT = (
+    "검색된 자료 발췌본이 질문에 답하는 데 쓸 근거를 담고 있는지 판단하세요.\n"
+    "- 충분히 답할 수 있으면 sufficient\n"
+    "- 질문의 일부라도 답할 근거가 있으면 partial\n"
+    "- 자료가 질문과 키워드만 겹치고 내용상 무관하면 insufficient\n"
+    "완벽한 답을 요구하지 말고, 근거가 조금이라도 있으면 partial 이상을 선택하세요."
+)
 
-def check_document_sufficiency(question: str, documents: list[dict]) -> tuple[bool, float, str]:
+# 발췌 길이: 너무 짧으면 근거가 잘려 insufficient로 오판된다
+_DOC_SNIPPET_MAX_CHARS = 1000
+
+
+def check_document_sufficiency(
+    question: str,
+    documents: list[dict],
+    rewritten_question: str = "",
+) -> tuple[str, str]:
     """
     검색된 문서가 질문에 답하기에 충분한지 LLM으로 판단.
-    Returns: (is_sufficient, confidence, reason)
+    Returns: (sufficiency, reason) — sufficiency는 "sufficient" | "partial" | "insufficient"
     """
     if _moderation_client is None or not documents:
-        return False, 0.0, "no_documents_or_no_api_key"
+        return "insufficient", "no_documents_or_no_api_key"
 
     snippets = "\n---\n".join(
-        (doc.get("content", "") or "")[:300] for doc in documents[:5]
+        (doc.get("content", "") or "")[:_DOC_SNIPPET_MAX_CHARS] for doc in documents[:5]
     )
+    question_block = f"[질문]\n{question}"
+    if rewritten_question and rewritten_question != question:
+        question_block += f"\n\n[검색용으로 재작성된 질문]\n{rewritten_question}"
 
     try:
         res = _moderation_client.chat.completions.create(
             model=_GUARDRAIL_MODEL,
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "검색된 자료 발췌본이 질문에 답하기에 충분한 정보를 담고 있는지 판단하세요. "
-                        "자료가 질문과 keyword로만 관련되거나 핵심 정보가 없으면 is_sufficient=false."
-                    ),
-                },
+                {"role": "system", "content": _DOC_JUDGE_SYSTEM_PROMPT},
                 {
                     "role": "user",
-                    "content": f"[질문]\n{question}\n\n[검색된 자료 발췌]\n{snippets}",
+                    "content": f"{question_block}\n\n[검색된 자료 발췌]\n{snippets}",
                 },
             ],
             temperature=0,
             response_format=_DOC_JUDGE_SCHEMA,
         )
         result = json.loads(res.choices[0].message.content)
-        return result["is_sufficient"], result["confidence"], result["reason"]
+        return result["sufficiency"], result["reason"]
 
     except Exception as e:
         logger.error("[DocJudge] API 호출 실패: %s", e, exc_info=True)
         # fail-open: 기존 judge 동작과 동일하게 문서가 있으면 통과시킴
-        return True, 0.0, "error_fail_open"
+        return "sufficient", "error_fail_open"
 
 
 # ==================== 4) 통합 진입점 ====================
