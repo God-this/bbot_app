@@ -1,9 +1,10 @@
 # 입력 검열 (OpenAI Moderation API + LLM 기반 입력 가드레일)
 #
-# generate() / generate_stream() 진입점에서 가장 먼저 호출되어야 함.
+# generate() / generate_stream()에서 캐시 미스 시, LLM 그래프 실행 전에 호출되어야 함.
 # PROVIDER 설정(upstage/ollama)과 무관하게 항상 OpenAI Moderation API를 사용.
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from openai import OpenAI
 from config import OPENAI_API_KEY
 from logging_config import get_logger
@@ -222,17 +223,24 @@ def check_document_sufficiency(
 
 # ==================== 4) 통합 진입점 ====================
 
+# Moderation API와 LLM 가드레일은 서로 독립적이므로 동시에 호출해 지연을 max(두 호출)로 줄인다
+_check_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="input-check")
+
+
 def is_safe_input(text: str) -> tuple[bool, str]:
     """
-    질문을 LLM/캐시에 태우기 전 최종 검열.
+    질문을 LLM에 태우기 전 최종 검열.
     Returns: (is_safe, block_reason)
         is_safe=False면 즉시 차단 메시지를 반환하고 이후 로직(캐시 저장 포함) 진행 금지.
     """
-    flagged, reason = check_moderation(text)
+    moderation_future = _check_executor.submit(check_moderation, text)
+    guardrail_future = _check_executor.submit(check_input_guardrail, text)
+
+    flagged, reason = moderation_future.result()
     if flagged:
         return False, f"moderation:{reason}"
 
-    result = check_input_guardrail(text)
+    result = guardrail_future.result()
     if result["is_jailbreak_attempt"]:
         return False, f"jailbreak:{result['reason']}"
     # ambiguous는 통과시키고 RAG 단계(문서 충분성/fallback)에 맡긴다

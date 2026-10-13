@@ -764,15 +764,12 @@ def generate(
 
         logger.info("===== Integrated Search Started ===== question=%s", question)
 
-    safe, reason = is_safe_input(question)
-    if not safe:
-       logger.warning("[Blocked] reason=%s | question=%s", reason, question[:200])
-       return get_block_message(reason), {}
-
     normalized_question = normalize_query(question)
 
     logger.debug("[Normalized Query]: %s", normalized_question)
 
+    # 캐시에는 가드레일을 통과한 답변만 저장되므로 캐시를 먼저 조회해
+    # 히트 시 가드레일 API 호출을 생략한다
     cache_hit_type, cached = lookup_answer_cache(question, normalized_question, use_cache)
     if cached:
         langfuse.update_current_span(
@@ -780,6 +777,11 @@ def generate(
             metadata={"cache_hit": cache_hit_type},
         )
         return cached["answer"], cached["sources"]
+
+    safe, reason = is_safe_input(question)
+    if not safe:
+       logger.warning("[Blocked] reason=%s | question=%s", reason, question[:200])
+       return get_block_message(reason), {}
 
     # LangGraph 실행 — callbacks에 Langfuse 핸들러를 넘겨서
     # route/retrieve/judge_stage1/rerank/judge_stage2/rewrite/generate/fallback
@@ -897,16 +899,6 @@ def generate_stream(
     ):
         langfuse.update_current_span(input={"question": question})
 
-    safe, reason = is_safe_input(question)
-    if not safe:
-       logger.warning("[Blocked-Stream] reason=%s | question=%s", reason, question[:200])
-       # 개행은 다른 스트림 구간과 동일하게 리터럴 "\\n"로 이스케이프해 전달
-       # (프론트엔드가 replaceAll('\\n', '\n')로 복원)
-       blocked = get_block_message(reason).replace("\n", "\\n")
-       yield f"data: {blocked}\n\n"
-       yield "data: [DONE]\n\n"
-       return
-
     normalized_question = normalize_query(question)
 
     # ---------- 캐시 조회 ----------
@@ -929,6 +921,16 @@ def generate_stream(
         )
         return
     # ---------- 캐시 조회 끝 ----------
+
+    safe, reason = is_safe_input(question)
+    if not safe:
+       logger.warning("[Blocked-Stream] reason=%s | question=%s", reason, question[:200])
+       # 개행은 다른 스트림 구간과 동일하게 리터럴 "\\n"로 이스케이프해 전달
+       # (프론트엔드가 replaceAll('\\n', '\n')로 복원)
+       blocked = get_block_message(reason).replace("\n", "\\n")
+       yield f"data: {blocked}\n\n"
+       yield "data: [DONE]\n\n"
+       return
 
     graph = create_graph()
     graph_result = graph.invoke(
