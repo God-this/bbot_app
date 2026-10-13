@@ -214,11 +214,13 @@ flutter run -d iPhone --dart-define=BACKEND_URL=http://your_server_ip:8000
 사용자 질문
 │
 ▼
-창조과학 관련 질문 필터링 (is_creation_question)
-└─ 관련 없음 ──▶ 답변 거절
-│관련 있음
+질문 재구성 (resolve_question) ─ 같은 세션에 이전 대화가 있을 때만
+└─ 직전 1턴을 참고해 단독으로 이해되는 질문으로 변환
+   (예: "몇마리였나요?" → "공룡은 몇 마리였나요?")
+   재구성 질문은 chat_messages.resolved_question에 저장되어 다음 질문의 맥락으로 쓰임
+│
 ▼
-쿼리 정규화 (normalize_query)
+쿼리 정규화 (normalize_query, 재구성 질문 기준)
 │
 ▼
 캐시 확인 (선택적, Redis) ──────────────────▶ 캐시 히트 시 즉시 반환
@@ -226,45 +228,46 @@ flutter run -d iPhone --dart-define=BACKEND_URL=http://your_server_ip:8000
 └─ Semantic Cache
 │캐시 미스
 ▼
+입력 가드레일 (is_safe_input) ─ 아래 두 검사를 병렬 실행
+├─ OpenAI Moderation API (유해 콘텐츠)
+└─ LLM 가드레일 (탈옥 시도 + 주제 on / ambiguous / off)
+   └─ 유해 · 탈옥 · off ──▶ 안내 메시지 반환 (ambiguous는 통과)
+│
+▼
 [LangGraph]
 │
 ├─ 라우터 (route = "internal", iteration = 0)
 │
-├─ 문서 검색 (retrieve_documents)
+├─ 문서 검색 (retrieve_documents, 재구성 질문 기준)
 │   ├─ 영어 번역 (원문이 영어가 아닌 경우)
-│   └─ 병렬 검색 (쿼리당 3개 태스크) ──────────────────┐
+│   └─ 병렬 검색 ──────────────────────────────────────┐
 │       ├─ 웹 문서 (crawled_data)                      │
 │       ├─ 도서 (book_en / book_ko + book_images)      │ ThreadPoolExecutor
 │       └─ 영상 (video_db)                             │
 │                                            ──────────┘
-├─ 문서 판정 (judge_documents)
-│   ├─ 문서 있음  → resolved
-│   └─ 문서 없음 → not_resolved
+├─ 1차 판정 (judge_stage1) ─ 유사도 0.3 미만 문서 제외
 │
-└─ 문서 존재 여부 분기
-├─ resolved ──────────────────────────────▶ [END]
-└─ not_resolved + iteration < 2
+├─ 리랭킹 (Cross-Encoder) ─ top-5 선별
 │
-▼
-질문 재작성 (rewrite_question)
-└─ 재검색으로 돌아감 (최대 2회)
+├─ 2차 판정 (judge_stage2) ─ LLM 문서 충분성 판정
+│   ├─ sufficient / partial ──────────────▶ 답변 생성
+│   └─ insufficient + iteration < 1 ──▶ 질문 재작성 (rewrite_question) 후 재검색 (최대 1회)
+│
+├─ 재시도 소진 시
+│   ├─ 리랭킹 문서 있음 ──▶ 답변 생성 (자료 범위 내에서)
+│   └─ 문서 없음 ──────▶ 답변 불가 메시지 반환 (fallback)
+│
+└─ 답변 생성 (generate_node) ─ 직전 대화 1턴 + 자료 + 질문으로 프롬프트 구성
 [LangGraph END]
-│
-▼
-문서 없음? ──▶ 답변 불가 메시지 반환
-│
-▼
-리랭킹 (Cross-Encoder)
-└─ 전체 문서 → top-5 선별
 │
 ▼
 언어 감지 (응답 언어 결정: 한국어 / 영어)
 │
 ▼
-LLM 답변 생성 (이전 대화 히스토리 포함)
+LLM 답변 생성
 │
 ▼
-캐시 저장 (선택적, Exact + Semantic)
+캐시 저장 (선택적, Exact + Semantic, 재구성 질문 기준)
 │
 ▼
 응답 반환 (답변 + 소스)
@@ -291,7 +294,7 @@ PostgreSQL + pgvector를 사용합니다.
 | --------------- | ------------------------------------------------------------------------- |
 | `users`         | id, provider, provider_id, email, nickname, profile_img, role, created_at |
 | `chat_sessions` | id, user_id, title                                                        |
-| `chat_messages` | id, session_id, role, content, sources, created_at                        |
+| `chat_messages` | id, session_id, role, content, resolved_question, sources, created_at     |
 ---
 
 ## LLM 전환
