@@ -9,7 +9,6 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
 from sentence_transformers import CrossEncoder
 
 # config를 먼저 import해서 .env가 로드된 다음에 langfuse를 초기화한다
@@ -537,9 +536,9 @@ def create_graph():
     workflow.add_edge("generate", END)
     workflow.add_edge("fallback", END)
 
-    return workflow.compile(
-        checkpointer=MemorySaver()
-    )
+    # 대화 기록은 chat_messages(DB)가 원본이고 그래프는 요청마다 새로 만들어지므로
+    # 체크포인터(MemorySaver)는 아무것도 유지하지 못해 두지 않는다
+    return workflow.compile()
 
 # ==================== Reranking ====================
 @observe(name="rerank-context", as_type="tool", capture_input=False, capture_output=False)
@@ -889,15 +888,8 @@ def generate(
             "fallback_message": "",
             "standalone_question": resolved_question,
         },
-        {
-            "configurable": {
-                "thread_id": thread_id
-            },
-            "callbacks": [_langfuse_langchain_handler],
-        }
+        {"callbacks": [_langfuse_langchain_handler]}
     )
-
-    chat_history = graph_result.get("chat_history", [])
 
     # judge_stage1/2가 재시도 소진 후에도 실패 → fallback 노드가 채운 메시지를
     # LLM 호출 없이 그대로 반환
@@ -934,18 +926,12 @@ def generate(
 
     answer = extract_final_answer(res.choices[0].message)
 
-    updated_history = chat_history + [
-        f"User: {question}",
-        f"Assistant: {answer}"
-    ]
-
     logger.info("Integrated answer completed")
 
     sources = {
         "video_docs": video_docs,
         "web_docs": web_docs,
         "book_docs": book_docs,
-        "chat_history": updated_history,
         "top_sources": reranked_docs,
     }
 
@@ -1043,10 +1029,7 @@ def generate_stream(
             "fallback_message": "",
             "standalone_question": resolved_question,
         },
-        {
-            "configurable": {"thread_id": thread_id},
-            "callbacks": [_langfuse_langchain_handler],
-        }
+        {"callbacks": [_langfuse_langchain_handler]}
     )
 
     # judge_stage1/2가 재시도 소진 후에도 실패 → fallback 노드가 채운 메시지를
