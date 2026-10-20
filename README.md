@@ -45,7 +45,7 @@
 | 데이터베이스   | PostgreSQL + pgvector                                       |
 | 캐시           | Redis 5.2.1 (일반 캐시 + 시맨틱 캐시)                       |
 | 인증           | python-jose (JWT), Google OAuth                             |
-| 모니터링       | LangSmith (선택)                                            |
+| 모니터링       | LangFuse                                                    |
 
 ---
 
@@ -295,6 +295,7 @@ PostgreSQL + pgvector를 사용합니다.
 | `users`         | id, provider, provider_id, email, nickname, profile_img, role, created_at |
 | `chat_sessions` | id, user_id, title                                                        |
 | `chat_messages` | id, session_id, role, content, resolved_question, sources, created_at     |
+
 ---
 
 ## LLM 전환
