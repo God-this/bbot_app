@@ -243,6 +243,7 @@ def retrieve_all_documents_parallel(queries: list[str], top_k: int = 5):
 _DECLARATIVE_ENDING = re.compile(r"(니다|었다|였다|이다|한다)[.!]?$")
 
 
+@observe(name="resolve-question", capture_input=False, capture_output=False)
 def resolve_question(question: str, recent_turns: list[dict] | None) -> str:
     """직전 대화(최근 1턴)를 참고해 질문을 단독으로 이해되는 질문 한 문장으로 바꾼다.
 
@@ -250,6 +251,14 @@ def resolve_question(question: str, recent_turns: list[dict] | None) -> str:
     바꿔 저장해 둔 질문(resolved_question)이므로, 후속 질문이 여러 번 이어져도 직전 1턴만으로
     맥락이 이어진다. 이전 대화가 없거나, 실패하거나, 결과가 질문 형태가 아니면 원 질문을 쓴다.
     """
+    langfuse = get_langfuse_client()
+    langfuse.update_current_span(input={"question": question, "has_history": bool(recent_turns)})
+    resolved = _resolve_question(question, recent_turns)
+    langfuse.update_current_span(output=resolved)
+    return resolved
+
+
+def _resolve_question(question: str, recent_turns: list[dict] | None) -> str:
     if not recent_turns:
         return question
 
@@ -275,7 +284,7 @@ def resolve_question(question: str, recent_turns: list[dict] | None) -> str:
                 },
             ],
             temperature=0,
-            name="resolve-question",
+            name="resolve-question-llm",
         )
         resolved = (res.choices[0].message.content or "").strip().strip('"')
     except Exception as e:
@@ -819,60 +828,44 @@ def enqueue_answer_eval(cached: bool, normalized_question: str, question: str, a
     )
 
 
-# ==================== Final Generate ====================
+# ==================== Langfuse 트레이스 기록 헬퍼 ====================
+# 요청 1건이 하나의 루트 span(generate-response / generate-response-stream) 아래에 기록되도록,
+# 루트 span의 input/output/metadata는 모두 아래 헬퍼로 남긴다.
 
-@observe(name="generate-response", capture_input=False, capture_output=False)
-def generate(
-    question: str,
-    thread_id: str = "user_1",
-    use_cache: bool = USE_CACHE,
-    user_id: str | None = None,
-    source: str = "cli",
-    recent_turns: list[dict] | None = None,
-    resolved_question: str | None = None,
-):
-    langfuse = get_langfuse_client()
+def _record_result(path: str, output: str, level: str | None = None, **metadata) -> None:
+    """응답 경로(cache-hit/blocked/fallback/rag)를 metadata로 남기고 루트 span의 output을 기록."""
+    get_langfuse_client().update_current_span(
+        output=output,
+        level=level,
+        metadata={"path": path, **metadata},
+    )
 
-    with propagate_attributes(
-        session_id=thread_id,
-        user_id=user_id,
-        tags=[source],
-    ):
-        langfuse.update_current_span(input={"question": question})
 
-        logger.info("===== Integrated Search Started ===== question=%s", question)
+def _prepare_question(question: str, recent_turns: list[dict] | None) -> str:
+    """이전 대화가 있으면 단독으로 이해되는 질문으로 바꾸고, 그 결과를 트레이스에 남긴다.
 
-    # 이전 대화가 있으면 단독으로 이해되는 질문으로 바꾼 뒤 캐시/검색을 모두 이 질문 기준으로 한다.
-    # ("몇마리였나요?" 같은 질문이 원문 그대로 캐시되면 다른 대화에 엉뚱한 답이 나간다)
-    # 서버는 DB 저장을 위해 미리 바꿔서 넘기고, CLI 등은 여기서 바꾼다.
-    if resolved_question is None:
-        resolved_question = resolve_question(question, recent_turns)
+    캐시/검색은 모두 바꾼 질문 기준으로 한다.
+    ("몇마리였나요?" 같은 질문이 원문 그대로 캐시되면 다른 대화에 엉뚱한 답이 나간다)
+    """
+    logger.info("===== Integrated Search Started ===== question=%s", question)
 
-    normalized_question = normalize_query(resolved_question)
+    resolved_question = resolve_question(question, recent_turns)
+    rewritten = resolved_question != question
 
-    logger.debug("[Normalized Query]: %s", normalized_question)
+    span_input = {"question": question}
+    if rewritten:
+        span_input["resolved_question"] = resolved_question
+    get_langfuse_client().update_current_span(input=span_input)
 
-    # 캐시에는 가드레일을 통과한 답변만 저장되므로 캐시를 먼저 조회해
-    # 히트 시 가드레일 API 호출을 생략한다
-    cache_hit_type, cached = lookup_answer_cache(resolved_question, normalized_question, use_cache)
-    if cached:
-        langfuse.update_current_span(
-            output=cached["answer"],
-            metadata={"cache_hit": cache_hit_type},
-        )
-        return cached["answer"], cached["sources"]
+    return resolved_question
 
-    safe, reason = is_safe_input(question, recent_turns)
-    if not safe:
-       logger.warning("[Blocked] reason=%s | question=%s", reason, question[:200])
-       return get_block_message(reason), {}
 
+def _run_graph(question: str, resolved_question: str, recent_turns: list[dict] | None) -> dict:
     # LangGraph 실행 — callbacks에 Langfuse 핸들러를 넘겨서
     # route/retrieve/judge_stage1/rerank/judge_stage2/rewrite/generate/fallback
     # 노드 전체가 하나의 invoke() 아래에서 자동으로 트레이싱되게 함
     graph = create_graph()
-
-    graph_result = graph.invoke(
+    return graph.invoke(
         {
             "question": question,
             "rewritten_question": "",
@@ -891,15 +884,53 @@ def generate(
         {"callbacks": [_langfuse_langchain_handler]}
     )
 
+
+# ==================== Final Generate ====================
+
+@observe(name="generate-response", capture_input=False, capture_output=False)
+def generate(
+    question: str,
+    thread_id: str = "user_1",
+    use_cache: bool = USE_CACHE,
+    user_id: str | None = None,
+    source: str = "cli",
+    recent_turns: list[dict] | None = None,
+):
+    """Returns: (answer, sources, resolved_question) — resolved_question은 다음 질문의 맥락으로 쓰도록 저장한다."""
+    # 본문 전체를 감싸야 이후 생성되는 하위 observation에도 user/session/tag가 붙는다
+    with propagate_attributes(session_id=thread_id, user_id=user_id, tags=[source]):
+        return _generate(question, use_cache, recent_turns)
+
+
+def _generate(question: str, use_cache: bool, recent_turns: list[dict] | None):
+    resolved_question = _prepare_question(question, recent_turns)
+
+    normalized_question = normalize_query(resolved_question)
+
+    logger.debug("[Normalized Query]: %s", normalized_question)
+
+    # 캐시에는 가드레일을 통과한 답변만 저장되므로 캐시를 먼저 조회해
+    # 히트 시 가드레일 API 호출을 생략한다
+    cache_hit_type, cached = lookup_answer_cache(resolved_question, normalized_question, use_cache)
+    if cached:
+        _record_result("cache-hit", cached["answer"], cache_hit=cache_hit_type)
+        return cached["answer"], cached["sources"], resolved_question
+
+    safe, reason = is_safe_input(question, recent_turns)
+    if not safe:
+        logger.warning("[Blocked] reason=%s | question=%s", reason, question[:200])
+        message = get_block_message(reason)
+        _record_result("blocked", message, level="WARNING", block_reason=reason)
+        return message, {}, resolved_question
+
+    graph_result = _run_graph(question, resolved_question, recent_turns)
+
     # judge_stage1/2가 재시도 소진 후에도 실패 → fallback 노드가 채운 메시지를
     # LLM 호출 없이 그대로 반환
     if graph_result.get("fallback_message"):
         answer = graph_result["fallback_message"]
-        langfuse.update_current_span(
-            output=answer,
-            metadata={"judgement": "not_resolved"},
-        )
-        return answer, {}
+        _record_result("fallback", answer, judgement="not_resolved")
+        return answer, {}, resolved_question
 
     reranked_docs = graph_result.get("reranked_documents", [])
     sources_by_type = graph_result.get("sources", {})
@@ -935,19 +966,17 @@ def generate(
         "top_sources": reranked_docs,
     }
 
-    langfuse.update_current_span(
-        output=answer,
-        metadata={
-            "web_docs": len(web_docs),
-            "book_docs": len(book_docs),
-            "video_docs": len(video_docs),
-        },
+    _record_result(
+        "rag", answer,
+        web_docs=len(web_docs),
+        book_docs=len(book_docs),
+        video_docs=len(video_docs),
     )
 
     cached = persist_answer_cache(use_cache, normalized_question, resolved_question, answer, sources)
     enqueue_answer_eval(cached, normalized_question, resolved_question, answer, reranked_docs)
 
-    return answer, sources
+    return answer, sources, resolved_question
 
 
 # ==================== Streaming Generate ====================
@@ -960,24 +989,22 @@ def generate_stream(
     user_id: str | None = None,
     source: str = "cli",
     recent_turns: list[dict] | None = None,
-    resolved_question: str | None = None,
 ) -> Generator[str, None, None]:
-    """답변을 SSE 형식으로 스트리밍. 토큰→[DONE]→[SOURCES]→[SESSION] 순서로 yield"""
+    """답변을 SSE 형식으로 스트리밍. [RESOLVED]→토큰→[DONE]→[SOURCES] 순서로 yield
 
-    langfuse = get_langfuse_client()
+    [RESOLVED]는 서버가 DB 저장용으로 받아 쓰는 내부 이벤트라 클라이언트로 내보내지 않는다.
+    """
+    # 본문 전체를 감싸야 이후 생성되는 하위 observation에도 user/session/tag가 붙는다.
+    # langfuse가 제너레이터를 같은 컨텍스트에서 재개하므로 yield를 사이에 둬도 안전하다.
+    with propagate_attributes(session_id=thread_id, user_id=user_id, tags=[source]):
+        yield from _generate_stream(question, use_cache, recent_turns)
 
-    with propagate_attributes(
-        session_id=thread_id,
-        user_id=user_id,
-        tags=[source],
-    ):
-        langfuse.update_current_span(input={"question": question})
 
-    # 이전 대화가 있으면 단독으로 이해되는 질문으로 바꾼 뒤 캐시/검색을 모두 이 질문 기준으로 한다.
-    # ("몇마리였나요?" 같은 질문이 원문 그대로 캐시되면 다른 대화에 엉뚱한 답이 나간다)
-    # 서버는 DB 저장을 위해 미리 바꿔서 넘기고, CLI 등은 여기서 바꾼다.
-    if resolved_question is None:
-        resolved_question = resolve_question(question, recent_turns)
+def _generate_stream(
+    question: str, use_cache: bool, recent_turns: list[dict] | None,
+) -> Generator[str, None, None]:
+    resolved_question = _prepare_question(question, recent_turns)
+    yield f"data: [RESOLVED]{json.dumps(resolved_question, ensure_ascii=False)}\n\n"
 
     normalized_question = normalize_query(resolved_question)
 
@@ -988,61 +1015,38 @@ def generate_stream(
         answer = cached["answer"]
         sources = cached["sources"]
 
+        _record_result("cache-hit", answer, cache_hit=cache_hit_type)
+
         for i in range(0, len(answer), 20):
             piece = answer[i:i+20].replace("\n", "\\n")
             yield f"data: {piece}\n\n"
 
         yield "data: [DONE]\n\n"
         yield f"data: [SOURCES]{json.dumps(sources, ensure_ascii=False)}\n\n"
-
-        langfuse.update_current_span(
-            output=answer,
-            metadata={"cache_hit": cache_hit_type},
-        )
         return
     # ---------- 캐시 조회 끝 ----------
 
     safe, reason = is_safe_input(question, recent_turns)
     if not safe:
-       logger.warning("[Blocked-Stream] reason=%s | question=%s", reason, question[:200])
-       # 개행은 다른 스트림 구간과 동일하게 리터럴 "\\n"로 이스케이프해 전달
-       # (프론트엔드가 replaceAll('\\n', '\n')로 복원)
-       blocked = get_block_message(reason).replace("\n", "\\n")
-       yield f"data: {blocked}\n\n"
-       yield "data: [DONE]\n\n"
-       return
+        logger.warning("[Blocked-Stream] reason=%s | question=%s", reason, question[:200])
+        message = get_block_message(reason)
+        _record_result("blocked", message, level="WARNING", block_reason=reason)
+        # 개행은 다른 스트림 구간과 동일하게 리터럴 "\\n"로 이스케이프해 전달
+        # (프론트엔드가 replaceAll('\\n', '\n')로 복원)
+        blocked = message.replace("\n", "\\n")
+        yield f"data: {blocked}\n\n"
+        yield "data: [DONE]\n\n"
+        return
 
-    graph = create_graph()
-    graph_result = graph.invoke(
-        {
-            "question": question,
-            "rewritten_question": "",
-            "route": "",
-            "documents": [],
-            "judgement": "",
-            "iteration": 0,
-            "chat_history": recent_turns_to_history(recent_turns),
-            "qualified_documents": [],
-            "reranked_documents": [],
-            "sources": {},
-            "final_messages": [],
-            "fallback_message": "",
-            "standalone_question": resolved_question,
-        },
-        {"callbacks": [_langfuse_langchain_handler]}
-    )
+    graph_result = _run_graph(question, resolved_question, recent_turns)
 
     # judge_stage1/2가 재시도 소진 후에도 실패 → fallback 노드가 채운 메시지를
     # LLM 호출 없이 그대로 스트리밍
     if graph_result.get("fallback_message"):
         msg = graph_result["fallback_message"]
+        _record_result("fallback", msg, judgement="not_resolved")
         yield f"data: {msg}\n\n"
         yield "data: [DONE]\n\n"
-
-        langfuse.update_current_span(
-            output=msg,
-            metadata={"judgement": "not_resolved"},
-        )
         return
 
     reranked_docs = graph_result.get("reranked_documents", [])
@@ -1081,6 +1085,13 @@ def generate_stream(
         "video_docs": video_docs,
         "top_sources": reranked_docs,
     }
+
+    _record_result(
+        "rag", full_answer,
+        web_docs=len(web_docs),
+        book_docs=len(book_docs),
+        video_docs=len(video_docs),
+    )
 
     # 출처는 이미 확정된 상태이므로 먼저 내보내 UI가 즉시 렌더링하게 함.
     # save_answer_cache는 임베딩 API 호출(수 초)을 포함하므로 뒤로 미룬다.
