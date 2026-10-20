@@ -1,11 +1,11 @@
 from config import get_conn
-from llm_factory import get_embedding
+from llm_factory import get_embedding, embed_query
 
 embedding_model = get_embedding()
 
 
 def retrieve_video_segments(question: str, top_k: int = 3):
-    q_emb = embedding_model.embed_query(question)
+    q_emb = embed_query(embedding_model, question, "embed-video-query")
 
     with get_conn() as conn:
         with conn.cursor() as cur:

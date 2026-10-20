@@ -46,7 +46,7 @@ def handle_question(question):
     try:
         start_time = time.time()
 
-        answer, sources_info = generate(question)
+        answer, sources_info, _ = generate(question)
 
         elapsed = time.time() - start_time
 
