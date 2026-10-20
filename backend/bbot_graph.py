@@ -830,10 +830,26 @@ def enqueue_answer_eval(cached: bool, normalized_question: str, question: str, a
 
 # ==================== Langfuse 트레이스 기록 헬퍼 ====================
 # 요청 1건이 하나의 루트 span(generate-response / generate-response-stream) 아래에 기록되도록,
-# 루트 span의 input/output/metadata는 모두 아래 헬퍼로 남긴다.
+# 루트 span의 input/output/tag/metadata는 모두 아래 헬퍼로 남긴다.
 
-def _record_result(path: str, output: str, level: str | None = None, **metadata) -> None:
-    """응답 경로(cache-hit/blocked/fallback/rag)를 metadata로 남기고 루트 span의 output을 기록."""
+def _tag_trace(trace_tags: list[str], *tags: str, **metadata) -> None:
+    """루트 span에 tag와 metadata를 추가해 Tracing 목록에서 바로 거를 수 있게 한다.
+
+    propagate_attributes를 중첩 호출하면 블록 안에서만 tag가 합쳐지고, span 속성은 그 목록으로
+    덮어쓴다. 그래서 지금까지 붙인 tag를 trace_tags에 모아 두고 매번 전체 목록을 다시 설정한다.
+    (metadata는 키별 속성이라 덮어쓰이지 않는다. 값은 200자 이하 문자열이어야 한다)
+    """
+    trace_tags.extend(t for t in tags if t not in trace_tags)
+    with propagate_attributes(
+        tags=list(trace_tags),
+        metadata={k: str(v) for k, v in metadata.items()} or None,
+    ):
+        pass
+
+
+def _record_result(trace_tags: list[str], path: str, output: str, level: str | None = None, **metadata) -> None:
+    """응답 경로(cache-hit/blocked/fallback/rag)를 tag로 붙이고 루트 span의 output을 기록."""
+    _tag_trace(trace_tags, path)
     get_langfuse_client().update_current_span(
         output=output,
         level=level,
@@ -841,7 +857,7 @@ def _record_result(path: str, output: str, level: str | None = None, **metadata)
     )
 
 
-def _prepare_question(question: str, recent_turns: list[dict] | None) -> str:
+def _prepare_question(question: str, recent_turns: list[dict] | None, trace_tags: list[str]) -> str:
     """이전 대화가 있으면 단독으로 이해되는 질문으로 바꾸고, 그 결과를 트레이스에 남긴다.
 
     캐시/검색은 모두 바꾼 질문 기준으로 한다.
@@ -850,14 +866,30 @@ def _prepare_question(question: str, recent_turns: list[dict] | None) -> str:
     logger.info("===== Integrated Search Started ===== question=%s", question)
 
     resolved_question = resolve_question(question, recent_turns)
+    used_history = bool(recent_turns)
     rewritten = resolved_question != question
 
+    _tag_trace(
+        trace_tags,
+        *(["followup"] if used_history else []),
+        *(["question-rewritten"] if rewritten else []),
+        used_history=str(used_history).lower(),
+    )
     span_input = {"question": question}
     if rewritten:
         span_input["resolved_question"] = resolved_question
     get_langfuse_client().update_current_span(input=span_input)
 
     return resolved_question
+
+
+def _lookup_cache_and_tag(resolved_question: str, normalized_question: str, use_cache: bool, trace_tags: list[str]):
+    cache_hit_type, cached = lookup_answer_cache(resolved_question, normalized_question, use_cache)
+    if cached:
+        _tag_trace(trace_tags, cache_hit=cache_hit_type)
+    else:
+        _tag_trace(trace_tags, "cache-miss")
+    return cache_hit_type, cached
 
 
 def _run_graph(question: str, resolved_question: str, recent_turns: list[dict] | None) -> dict:
@@ -899,11 +931,12 @@ def generate(
     """Returns: (answer, sources, resolved_question) — resolved_question은 다음 질문의 맥락으로 쓰도록 저장한다."""
     # 본문 전체를 감싸야 이후 생성되는 하위 observation에도 user/session/tag가 붙는다
     with propagate_attributes(session_id=thread_id, user_id=user_id, tags=[source]):
-        return _generate(question, use_cache, recent_turns)
+        return _generate(question, use_cache, source, recent_turns)
 
 
-def _generate(question: str, use_cache: bool, recent_turns: list[dict] | None):
-    resolved_question = _prepare_question(question, recent_turns)
+def _generate(question: str, use_cache: bool, source: str, recent_turns: list[dict] | None):
+    trace_tags = [source]
+    resolved_question = _prepare_question(question, recent_turns, trace_tags)
 
     normalized_question = normalize_query(resolved_question)
 
@@ -911,16 +944,17 @@ def _generate(question: str, use_cache: bool, recent_turns: list[dict] | None):
 
     # 캐시에는 가드레일을 통과한 답변만 저장되므로 캐시를 먼저 조회해
     # 히트 시 가드레일 API 호출을 생략한다
-    cache_hit_type, cached = lookup_answer_cache(resolved_question, normalized_question, use_cache)
+    cache_hit_type, cached = _lookup_cache_and_tag(resolved_question, normalized_question, use_cache, trace_tags)
     if cached:
-        _record_result("cache-hit", cached["answer"], cache_hit=cache_hit_type)
+        _record_result(trace_tags, "cache-hit", cached["answer"], cache_hit=cache_hit_type)
         return cached["answer"], cached["sources"], resolved_question
 
     safe, reason = is_safe_input(question, recent_turns)
     if not safe:
         logger.warning("[Blocked] reason=%s | question=%s", reason, question[:200])
         message = get_block_message(reason)
-        _record_result("blocked", message, level="WARNING", block_reason=reason)
+        _tag_trace(trace_tags, block_type=reason.split(":", 1)[0])
+        _record_result(trace_tags, "blocked", message, level="WARNING", block_reason=reason)
         return message, {}, resolved_question
 
     graph_result = _run_graph(question, resolved_question, recent_turns)
@@ -929,7 +963,7 @@ def _generate(question: str, use_cache: bool, recent_turns: list[dict] | None):
     # LLM 호출 없이 그대로 반환
     if graph_result.get("fallback_message"):
         answer = graph_result["fallback_message"]
-        _record_result("fallback", answer, judgement="not_resolved")
+        _record_result(trace_tags, "fallback", answer, judgement="not_resolved")
         return answer, {}, resolved_question
 
     reranked_docs = graph_result.get("reranked_documents", [])
@@ -967,7 +1001,7 @@ def _generate(question: str, use_cache: bool, recent_turns: list[dict] | None):
     }
 
     _record_result(
-        "rag", answer,
+        trace_tags, "rag", answer,
         web_docs=len(web_docs),
         book_docs=len(book_docs),
         video_docs=len(video_docs),
@@ -997,25 +1031,26 @@ def generate_stream(
     # 본문 전체를 감싸야 이후 생성되는 하위 observation에도 user/session/tag가 붙는다.
     # langfuse가 제너레이터를 같은 컨텍스트에서 재개하므로 yield를 사이에 둬도 안전하다.
     with propagate_attributes(session_id=thread_id, user_id=user_id, tags=[source]):
-        yield from _generate_stream(question, use_cache, recent_turns)
+        yield from _generate_stream(question, use_cache, source, recent_turns)
 
 
 def _generate_stream(
-    question: str, use_cache: bool, recent_turns: list[dict] | None,
+    question: str, use_cache: bool, source: str, recent_turns: list[dict] | None,
 ) -> Generator[str, None, None]:
-    resolved_question = _prepare_question(question, recent_turns)
+    trace_tags = [source]
+    resolved_question = _prepare_question(question, recent_turns, trace_tags)
     yield f"data: [RESOLVED]{json.dumps(resolved_question, ensure_ascii=False)}\n\n"
 
     normalized_question = normalize_query(resolved_question)
 
     # ---------- 캐시 조회 ----------
-    cache_hit_type, cached = lookup_answer_cache(resolved_question, normalized_question, use_cache)
+    cache_hit_type, cached = _lookup_cache_and_tag(resolved_question, normalized_question, use_cache, trace_tags)
     if cached:
         logger.info("Cache Hit (stream, %s) — question: %s", cache_hit_type, resolved_question)
         answer = cached["answer"]
         sources = cached["sources"]
 
-        _record_result("cache-hit", answer, cache_hit=cache_hit_type)
+        _record_result(trace_tags, "cache-hit", answer, cache_hit=cache_hit_type)
 
         for i in range(0, len(answer), 20):
             piece = answer[i:i+20].replace("\n", "\\n")
@@ -1030,7 +1065,8 @@ def _generate_stream(
     if not safe:
         logger.warning("[Blocked-Stream] reason=%s | question=%s", reason, question[:200])
         message = get_block_message(reason)
-        _record_result("blocked", message, level="WARNING", block_reason=reason)
+        _tag_trace(trace_tags, block_type=reason.split(":", 1)[0])
+        _record_result(trace_tags, "blocked", message, level="WARNING", block_reason=reason)
         # 개행은 다른 스트림 구간과 동일하게 리터럴 "\\n"로 이스케이프해 전달
         # (프론트엔드가 replaceAll('\\n', '\n')로 복원)
         blocked = message.replace("\n", "\\n")
@@ -1044,7 +1080,7 @@ def _generate_stream(
     # LLM 호출 없이 그대로 스트리밍
     if graph_result.get("fallback_message"):
         msg = graph_result["fallback_message"]
-        _record_result("fallback", msg, judgement="not_resolved")
+        _record_result(trace_tags, "fallback", msg, judgement="not_resolved")
         yield f"data: {msg}\n\n"
         yield "data: [DONE]\n\n"
         return
@@ -1087,7 +1123,7 @@ def _generate_stream(
     }
 
     _record_result(
-        "rag", full_answer,
+        trace_tags, "rag", full_answer,
         web_docs=len(web_docs),
         book_docs=len(book_docs),
         video_docs=len(video_docs),
