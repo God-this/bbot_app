@@ -38,6 +38,21 @@ def get_embedding():
         raise ValueError(f"지원하지 않는 EMBED_PROVIDER: {EMBED_PROVIDER}")
 
 
+def embed_query(model, text: str, name: str) -> list[float]:
+    """질문 임베딩 — OpenAI 임베딩이면 Langfuse에 name으로 기록한다(기본값은 "OpenAI-embedding").
+
+    name은 OpenAI API 인자가 아니라 langfuse.openai 래퍼가 가져가는 값이라,
+    래퍼가 openai를 패치한 상태에서 OpenAIEmbeddings일 때만 넘긴다.
+    (Upstage/Ollama 임베딩은 래퍼를 거치지 않으므로 그대로 호출)
+    """
+    from langchain_openai import OpenAIEmbeddings
+
+    if isinstance(model, OpenAIEmbeddings):
+        import langfuse.openai  # noqa: F401 — import 시 openai를 패치한다
+        return model.embed_query(text, name=name)
+    return model.embed_query(text)
+
+
 def get_judge_llm():
     """Ragas 평가용 judge LLM — JUDGE_PROVIDER로 답변 생성 모델과 독립 설정 가능"""
     from config import (

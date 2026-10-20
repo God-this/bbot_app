@@ -1,12 +1,12 @@
 from config import get_conn
-from llm_factory import get_embedding
+from llm_factory import get_embedding, embed_query
 
 embedding_model = get_embedding()
 
 
 def retrieve_web_documents(question: str, top_k: int = 5) -> list[dict]:
     """crawled_data 테이블에서 벡터 유사도 검색"""
-    q_embedding = embedding_model.embed_query(question)
+    q_embedding = embed_query(embedding_model, question, "embed-web-query")
 
     with get_conn() as conn:
         with conn.cursor() as cur:

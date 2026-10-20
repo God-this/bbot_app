@@ -767,7 +767,7 @@ def lookup_answer_cache(question: str, normalized_question: str, use_cache: bool
         # 캐시 비활성화 시에도 유사도 점수만 로그로 확인
         _keys = list(_redis_client.scan_iter(f"{CACHE_KEY_PREFIX}*"))
         if _keys:
-            _q_emb = get_embedding(question)
+            _q_emb = get_embedding(question, "embed-cache-similarity-log")
             logger.debug("[Similarity Log (cache OFF)]")
             for _key in _keys:
                 _raw = _redis_client.get(_key)
