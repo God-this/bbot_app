@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../theme.dart';
 import '../models/chat_models.dart';
+import 'bebot_logo.dart';
 
 class WelcomeView extends StatelessWidget {
   final List<SuggestedQuestion> suggestions;
@@ -26,19 +27,7 @@ class WelcomeView extends StatelessWidget {
               const SizedBox(height: 40),
 
               // BeBot 로고 아이콘
-              Container(
-                width: 72,
-                height: 72,
-                decoration: BoxDecoration(
-                  color: AppColors.primarySurface,
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: const Icon(
-                  Icons.smart_toy_rounded,
-                  size: 38,
-                  color: AppColors.primaryDark,
-                ),
-              )
+              const BebotLogo(size: 72)
                   .animate()
                   .fadeIn(duration: 500.ms)
                   .scale(begin: const Offset(0.8, 0.8)),
