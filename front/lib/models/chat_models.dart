@@ -6,6 +6,10 @@ class ChatMessage {
   final DateTime timestamp;
   final SourceInfo? sources;
   final bool isLoading;
+  /// 서버 chat_messages.id (봇 답변 평가에 사용)
+  final int? serverId;
+  /// 답변 평가: 2=👍👍, 1=👍, -1=👎, null=평가 안 함
+  final int? feedback;
 
   ChatMessage({
     required this.id,
@@ -14,12 +18,16 @@ class ChatMessage {
     required this.timestamp,
     this.sources,
     this.isLoading = false,
+    this.serverId,
+    this.feedback,
   });
 
   ChatMessage copyWith({
     String? content,
     SourceInfo? sources,
     bool? isLoading,
+    int? serverId,
+    int? Function()? feedback,
   }) {
     return ChatMessage(
       id: id,
@@ -28,6 +36,9 @@ class ChatMessage {
       timestamp: timestamp,
       sources: sources ?? this.sources,
       isLoading: isLoading ?? this.isLoading,
+      serverId: serverId ?? this.serverId,
+      // null로 되돌릴 수 있도록 함수로 받는다
+      feedback: feedback != null ? feedback() : this.feedback,
     );
   }
 }

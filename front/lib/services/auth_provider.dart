@@ -21,7 +21,9 @@ class AuthProvider extends ChangeNotifier {
   String?    get error     => _error;
   bool get isLoading        => _status == AuthStatus.unknown;
   bool get isLoggedIn       => _status == AuthStatus.authenticated;
-  bool get isGuest          => _user?.role != 'admin' && (_token != null) && (_user?.email.isEmpty ?? false);
+  // 이메일 유무가 아니라 로그인 제공자로 판단한다.
+  // (카카오는 이메일 동의를 받지 않으면 email이 비어 있어 게스트로 오인됨)
+  bool get isGuest          => _token != null && (_user?.isGuest ?? false);
 
   /// 앱 시작 시 저장된 토큰 확인
   Future<void> init() async {

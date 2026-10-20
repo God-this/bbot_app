@@ -23,7 +23,7 @@ def check_rate_limit(user_id: int):
     if not _REDIS_AVAILABLE:
         return
 
-    key = f"ratelimit:{user_id}"
+    key = f"bebot:ratelimit:{user_id}"
     try:
         current = _redis_client.incr(key)
         if current == 1:
