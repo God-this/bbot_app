@@ -578,7 +578,7 @@ def rerank_node(state: GraphState) -> GraphState:
     logger.debug("[Rerank Node]")
 
     qualified = state.get("qualified_documents", [])
-    question = state.get("rewritten_question") or state["question"]
+    question = state.get("rewritten_question") or state.get("standalone_question") or state["question"]
 
     ranked = rerank_documents(question, qualified, top_k=5)
 
