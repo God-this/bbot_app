@@ -3,9 +3,13 @@
 # generate() / generate_stream()에서 캐시 미스 시, LLM 그래프 실행 전에 호출되어야 함.
 # PROVIDER 설정(upstage/ollama)과 무관하게 항상 OpenAI Moderation API를 사용.
 
+import contextvars
 import json
 from concurrent.futures import ThreadPoolExecutor
-from openai import OpenAI
+
+from langfuse import observe, get_client as get_langfuse_client
+# langfuse 래퍼를 명시적으로 써야 import 순서와 무관하게 호출이 트레이스에 기록된다
+from langfuse.openai import OpenAI
 from config import OPENAI_API_KEY
 from logging_config import get_logger
 
@@ -17,6 +21,7 @@ _moderation_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # ==================== 1) OpenAI Moderation API ====================
 
+@observe(name="moderation-api", as_type="guardrail")
 def check_moderation(text: str) -> tuple[bool, str]:
     """
     OpenAI Moderation API로 유해 콘텐츠 여부 확인.
@@ -151,6 +156,7 @@ def check_input_guardrail(text: str, recent_turns: list[dict] | None = None) -> 
             ],
             temperature=0,
             response_format=_INPUT_GUARDRAIL_SCHEMA,
+            name="input-guardrail-llm",
         )
         result = json.loads(res.choices[0].message.content)
 
@@ -237,6 +243,7 @@ def check_document_sufficiency(
             ],
             temperature=0,
             response_format=_DOC_JUDGE_SCHEMA,
+            name="doc-sufficiency-judge",
         )
         result = json.loads(res.choices[0].message.content)
         return result["sufficiency"], result["reason"]
@@ -253,6 +260,7 @@ def check_document_sufficiency(
 _check_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="input-check")
 
 
+@observe(name="input-guardrail", as_type="guardrail", capture_input=False, capture_output=False)
 def is_safe_input(text: str, recent_turns: list[dict] | None = None) -> tuple[bool, str]:
     """
     질문을 LLM에 태우기 전 최종 검열.
@@ -260,8 +268,21 @@ def is_safe_input(text: str, recent_turns: list[dict] | None = None) -> tuple[bo
     Returns: (is_safe, block_reason)
         is_safe=False면 즉시 차단 메시지를 반환하고 이후 로직(캐시 저장 포함) 진행 금지.
     """
-    moderation_future = _check_executor.submit(check_moderation, text)
-    guardrail_future = _check_executor.submit(check_input_guardrail, text, recent_turns)
+    get_langfuse_client().update_current_span(
+        input={"question": text, "has_history": bool(recent_turns)},
+    )
+    safe, reason = _run_input_checks(text, recent_turns)
+    get_langfuse_client().update_current_span(output={"safe": safe, "reason": reason})
+    return safe, reason
+
+
+def _run_input_checks(text: str, recent_turns: list[dict] | None) -> tuple[bool, str]:
+    # submit은 contextvars를 넘기지 않아 그대로 쓰면 하위 호출이 Langfuse 트레이스에서 떨어져 나간다.
+    # 작업마다 컨텍스트 복사본을 따로 만들어야 한다(하나를 두 스레드가 동시에 run()하면 RuntimeError).
+    moderation_future = _check_executor.submit(contextvars.copy_context().run, check_moderation, text)
+    guardrail_future = _check_executor.submit(
+        contextvars.copy_context().run, check_input_guardrail, text, recent_turns,
+    )
 
     flagged, reason = moderation_future.result()
     if flagged:
