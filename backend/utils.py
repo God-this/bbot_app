@@ -43,15 +43,18 @@ def translate_to_english(question: str) -> str:
 _THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 
+def strip_think_tags(content: str) -> str:
+    """content 안에 <think>...</think> 형태로 섞여 들어온 reasoning 흔적 제거."""
+    return _THINK_TAG_RE.sub("", content or "").strip()
+
+
 def extract_final_answer(message) -> str:
     """
     reasoning 모델 응답에서 최종 답변만 안전하게 추출.
     1) message.reasoning 같은 별도 필드는 애초에 안 씀 (content만 사용)
     2) 혹시 content 안에 <think>...</think> 형태로 섞여 들어온 경우 제거
     """
-    content = message.content or ""
-    content = _THINK_TAG_RE.sub("", content).strip()
-    return content
+    return strip_think_tags(message.content or "")
 
 
 def reasoning_kwargs() -> dict:
