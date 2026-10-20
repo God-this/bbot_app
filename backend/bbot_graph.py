@@ -578,7 +578,8 @@ def rerank_node(state: GraphState) -> GraphState:
     logger.debug("[Rerank Node]")
 
     qualified = state.get("qualified_documents", [])
-    question = state.get("rewritten_question") or state["question"]
+    # 검색과 같은 질문 기준으로 재정렬해야 한다 — 후속 질문 원문("몇마리였나요?")으로는 관련도를 매길 수 없다
+    question = state.get("rewritten_question") or state.get("standalone_question") or state["question"]
 
     ranked = rerank_documents(question, qualified, top_k=5)
 
