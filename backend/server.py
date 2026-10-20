@@ -163,21 +163,19 @@ async def chat(
         raise HTTPException(status_code=400, detail="질문이 비어있습니다.")
 
     try:
-        from bbot_graph import generate, resolve_question
+        from bbot_graph import generate
 
         recent_turns = await _load_recent_turns(user["user_id"], req.session_id)
-        resolved_question = await asyncio.to_thread(
-            resolve_question, req.question.strip(), recent_turns,
-        )
 
-        answer, sources_raw = await asyncio.to_thread(
+        # 질문 재구성까지 generate 안에서 해야 같은 Langfuse 트레이스에 기록된다.
+        # 바꾼 질문은 다음 질문의 맥락으로 쓰기 위해 함께 저장한다.
+        answer, sources_raw, resolved_question = await asyncio.to_thread(
             generate,
             req.question.strip(),
             thread_id=str(user["user_id"]),
             user_id=str(user["user_id"]),
             source="api",
             recent_turns=recent_turns,
-            resolved_question=resolved_question,
         )
 
         raw = sources_raw if isinstance(sources_raw, dict) else {}
@@ -231,23 +229,29 @@ async def chat_stream(
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="질문이 비어있습니다.")
 
-    from bbot_graph import generate_stream, resolve_question
+    from bbot_graph import generate_stream
 
     recent_turns = await _load_recent_turns(user["user_id"], req.session_id)
-    # 바꾼 질문은 다음 질문의 맥락으로 쓰기 위해 함께 저장하므로 서버에서 먼저 만든다
-    resolved_question = await asyncio.to_thread(
-        resolve_question, req.question.strip(), recent_turns,
-    )
 
     async def event_generator():
+        # 질문 재구성까지 generate_stream 안에서 해야 같은 Langfuse 트레이스에 기록된다
         gen = generate_stream(
             req.question.strip(),
             thread_id=str(user["user_id"]),
             user_id=str(user["user_id"]),
             source="api",
             recent_turns=recent_turns,
-            resolved_question=resolved_question,
         )
+
+        # 첫 이벤트는 바꾼 질문([RESOLVED])이다. 다음 질문의 맥락으로 쓰기 위해 함께 저장하며,
+        # 클라이언트로는 보내지 않는다. 재구성 LLM 호출이 이벤트 루프를 막지 않게 스레드에서 받는다.
+        resolved_question = req.question.strip()
+        first = await asyncio.to_thread(next, gen, None)
+        if first and first.startswith("data: [RESOLVED]"):
+            try:
+                resolved_question = json.loads(first.replace("data: [RESOLVED]", "", 1).strip())
+            except Exception:
+                pass
 
         full_answer = ""
         sources_raw = {}
