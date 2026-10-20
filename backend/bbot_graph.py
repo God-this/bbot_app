@@ -21,9 +21,10 @@ from llm_factory import get_client
 from bbot_web import retrieve_web_documents
 from bbot_book import retrieve_pages
 from bbot_video import retrieve_video_segments
-from utils import detect_language, translate_to_english, strip_think_tags, reasoning_kwargs
+from utils import detect_language, translate_to_english, extract_final_answer, reasoning_kwargs
 from moderation import is_safe_input, check_document_sufficiency
-from bible_tool import chat_with_tools, stream_with_tools, BIBLE_TOOL_PROMPT
+from bible_verify import VerseStreamFilter, reverify_cached
+from bible_tool_verify import make_llm_verifier
 
 import re
 
@@ -88,6 +89,10 @@ except ImportError:
 
 
 client = get_client()
+
+# 성경 구절 검증 — VERSE_VERIFY_MODE=code(기본, 코드로 바로 검증) / tool(LLM 툴콜링 검증) / off
+# tool 방식에서만 아래 검증 함수가 쓰인다. (bible_verify.py, bible_tool_verify.py 참고)
+_verse_llm = make_llm_verifier(client, LLM_MODEL, name="verse-verify-tool", **reasoning_kwargs())
 
 # LangGraph/LangChain 실행을 자동으로 Langfuse에 트레이싱하는 콜백 핸들러.
 # graph.invoke()의 config에 넣어주면 route/retrieve/judge/rewrite 노드가
@@ -665,6 +670,12 @@ SYSTEM_PROMPT_TEMPLATE = """[Role & Identity]
 3. 명확성: 추상적인 설명보다는 가능한 경우 검색된 데이터에 기반한 구체적인 사례(예: 화석 기록의 부재, DNA의 정보성 등)를 언급하십시오.
 4. 마무리: 답변의 끝에는 관련된 성경 구절을 한 문장 인용하거나, 창조의 섭리를 묵상할 수 있는 문구로 마무리하십시오.
 
+[성경 인용 규칙]
+- 구절 본문을 인용할 때는 "본문" (요한복음 3:16, 개역한글) 형식으로 쓰십시오.
+- 책 이름은 '요', '창'과 같은 약어 대신 '요한복음', '창세기'처럼 정식 명칭을 쓰십시오.
+- 본문 인용은 한 번에 최대 3절까지만 하십시오. 더 긴 범위는 장절만 언급하십시오.
+- 본문이 정확히 기억나지 않는 구절은 본문을 지어내지 말고 장절만 언급하십시오.
+
 [Constraint]
 - 기독교 세계관에 반하는 가치관(유물론, 무신론적 진화론, 유신론적 진화론 등)을 정답으로 제시하지 마십시오.
 - 성경의 기록을 신화나 상징으로 격하시키는 표현을 사용하지 마십시오.
@@ -696,7 +707,6 @@ def generate_node(state: GraphState) -> GraphState:
     history_text = format_chat_history(chat_history)
 
     system_prompt = SYSTEM_PROMPT_TEMPLATE.format(lang_instruction=lang_instruction)
-    system_prompt += BIBLE_TOOL_PROMPT
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -858,11 +868,13 @@ def generate(
     # 히트 시 가드레일 API 호출을 생략한다
     cache_hit_type, cached = lookup_answer_cache(resolved_question, normalized_question, use_cache)
     if cached:
+        # 검증 기능 도입 전에 저장된 캐시 답변도 있으므로 꺼낼 때 다시 검증한다 (code 방식, LLM 호출 없음)
+        answer = reverify_cached(cached["answer"])
         langfuse.update_current_span(
-            output=cached["answer"],
+            output=answer,
             metadata={"cache_hit": cache_hit_type},
         )
-        return cached["answer"], cached["sources"]
+        return answer, cached["sources"]
 
     safe, reason = is_safe_input(question, recent_turns)
     if not safe:
@@ -918,14 +930,20 @@ def generate(
 
     logger.debug("[Generate]")
 
-    raw_answer = chat_with_tools(
-        client, LLM_MODEL, messages,
+    res = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=messages,
         temperature=0,
         name="generate-final-answer",
         **reasoning_kwargs(),
     )
 
-    answer = strip_think_tags(raw_answer)
+    answer = extract_final_answer(res.choices[0].message)
+
+    # 답변 속 성경 구절을 개역한글 원문과 대조한다
+    # (없는 구절 제거, 틀린 본문 교체, 주소만 언급된 구절은 끝에 '참고 구절'로 추가)
+    verse_filter = VerseStreamFilter(llm=_verse_llm)
+    answer = verse_filter.feed(answer) + verse_filter.finish()
 
     logger.info("Integrated answer completed")
 
@@ -942,6 +960,7 @@ def generate(
             "web_docs": len(web_docs),
             "book_docs": len(book_docs),
             "video_docs": len(video_docs),
+            "verse_check": verse_filter.summary(),
         },
     )
 
@@ -986,7 +1005,8 @@ def generate_stream(
     cache_hit_type, cached = lookup_answer_cache(resolved_question, normalized_question, use_cache)
     if cached:
         logger.info("Cache Hit (stream, %s) — question: %s", cache_hit_type, resolved_question)
-        answer = cached["answer"]
+        # 검증 기능 도입 전에 저장된 캐시 답변도 있으므로 꺼낼 때 다시 검증한다 (code 방식, LLM 호출 없음)
+        answer = reverify_cached(cached["answer"])
         sources = cached["sources"]
 
         for i in range(0, len(answer), 20):
@@ -1054,16 +1074,45 @@ def generate_stream(
 
     messages = graph_result["final_messages"]
 
-    full_answer = ""
-    for token in stream_with_tools(
-        client, LLM_MODEL, messages,
+    stream = client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=messages,
         temperature=0,
+        stream=True,
         name="generate-final-answer-stream",
         **reasoning_kwargs(),
-    ):
-        full_answer += token
-        safe = token.replace("\n", "\\n")
+    )
+
+    # 성경 구절 부분만 잠깐 붙잡았다가 원문과 대조한 뒤 내보낸다.
+    # 나머지 글자는 지금처럼 받는 즉시 내보낸다. (bible_verify.py 참고)
+    verse_filter = VerseStreamFilter(llm=_verse_llm)
+
+    full_answer = ""
+    for chunk in stream:
+        # stream_options={"include_usage": True}를 나중에 켜서 토큰 사용량을
+        # 트레이싱하게 되면, 마지막에 choices가 빈 청크가 하나 더 오므로
+        # 이 가드가 없으면 IndexError가 남
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta.content
+        if delta:
+            out = verse_filter.feed(delta)
+            if out:
+                full_answer += out
+                safe = out.replace("\n", "\\n")
+                yield f"data: {safe}\n\n"
+
+    # 붙잡아 둔 나머지 + 끝에 붙는 '참고 구절'
+    tail = verse_filter.finish()
+    if tail:
+        full_answer += tail
+        safe = tail.replace("\n", "\\n")
         yield f"data: {safe}\n\n"
+
+    langfuse.update_current_span(
+        output=full_answer,
+        metadata={"verse_check": verse_filter.summary()},
+    )
 
     sources = {
         "web_docs":   web_docs,
