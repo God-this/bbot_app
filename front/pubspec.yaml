@@ -59,3 +59,4 @@ flutter:
   uses-material-design: true
   assets:
     - .env
+    - assets/images/bebot_logo.png
