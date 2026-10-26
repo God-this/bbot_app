@@ -1,10 +1,16 @@
 # BeBot 스테이징 (emptycan) compose
 #
-# 실행: docker compose --env-file backend/.env.staging up -d
+# 실행:
+#   BACKEND_TAG=<sha> FRONT_TAG=<sha> docker compose --env-file backend/.env.staging up -d
 #   - ${DB_*} 값은 --env-file로 넘긴 backend/.env.staging에서 가져온다
-#   - --env-file 없이 실행하면 필수 값이 없다는 오류로 중단된다
+#   - --env-file이나 태그 없이 실행하면 필수 값이 없다는 오류로 중단된다
+#   - BACKEND_TAG: Docker Hub에 push한 bebot-backend 이미지 태그
+#   - FRONT_TAG: ./deploy/build.sh로 만든 dist/web-<sha> 폴더의 sha
 #
-# 서비스는 Phase 2 진행 순서대로 추가한다: postgres → redis → backend → frontend
+# 외부에 열리는 포트는 frontend(nginx) 하나뿐이다.
+#   브라우저 → frontend:80 ─┬─ 정적 파일 (dist/web-<sha>)
+#                          └─ /api, /images → backend:8000 ─┬─ redis:6379
+#                                                           └─ postgres:5432
 name: bebot
 
 services:
@@ -28,6 +34,59 @@ services:
       retries: 10
       start_period: 10s
     # 외부 포트는 열지 않는다. 접속은 docker compose exec postgres psql ... 로 한다
+
+  redis:
+    image: redis:7.4
+    restart: unless-stopped
+    # 캐시·요청 제한 용도라 volume 없이 둔다. down → up 하면 비어 있는 상태로 시작한다
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    image: eunsaem338/bebot-backend:${BACKEND_TAG:?BACKEND_TAG 필요 (push한 bebot-backend 이미지 태그)}
+    restart: unless-stopped
+    env_file: backend/.env.staging
+    # 이미지 ENTRYPOINT가 uvicorn이고, 워커 수만 덮어쓴다 (워커마다 리랭커 모델을 따로 올린다)
+    command: ["--workers", "${BACKEND_WORKERS:-1}"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # 헬스체크는 이미지에 정의된 /api/health 를 그대로 쓴다
+
+  frontend:
+    # 운영(S3 + CloudFront)과 같은 정적 파일을 공식 nginx로 서빙한다. 직접 빌드하는 이미지 없음
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "${FRONT_PORT:-80}:80"
+    volumes:
+      - type: bind
+        source: ./dist/web-${FRONT_TAG:?FRONT_TAG 필요 (dist/web-<sha>의 sha)}
+        target: /usr/share/nginx/html
+        read_only: true
+        bind:
+          # 폴더가 없을 때 빈 폴더를 만들어 403이 나는 대신 기동을 실패시킨다
+          create_host_path: false
+      - type: bind
+        source: ./deploy/nginx/staging.conf
+        target: /etc/nginx/conf.d/default.conf
+        read_only: true
+        bind:
+          create_host_path: false
+    # nginx는 시작할 때 'backend' 이름을 찾으므로 backend가 healthy가 된 뒤 띄운다
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
 
 volumes:
   pgdata:
