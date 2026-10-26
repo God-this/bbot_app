@@ -1,0 +1,33 @@
+# BeBot 스테이징 (emptycan) compose
+#
+# 실행: docker compose --env-file backend/.env.staging up -d
+#   - ${DB_*} 값은 --env-file로 넘긴 backend/.env.staging에서 가져온다
+#   - --env-file 없이 실행하면 필수 값이 없다는 오류로 중단된다
+#
+# 서비스는 Phase 2 진행 순서대로 추가한다: postgres → redis → backend → frontend
+name: bebot
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.1-pg18   # 운영과 동일: PostgreSQL 18, pgvector 0.8.1
+    restart: unless-stopped
+    environment:
+      # 빈 volume으로 처음 기동할 때만 적용된다. 이후 값을 바꾸면 volume을 지우고 다시 만들어야 한다
+      POSTGRES_DB: ${DB_NAME:?backend/.env.staging의 DB_NAME 필요 (--env-file)}
+      POSTGRES_USER: ${DB_USER:?backend/.env.staging의 DB_USER 필요 (--env-file)}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?backend/.env.staging의 DB_PASSWORD 필요 (--env-file)}
+    volumes:
+      # PG 18 이미지는 데이터가 /var/lib/postgresql/18/docker에 생기므로 상위 경로를 마운트한다
+      - pgdata:/var/lib/postgresql
+    # 벡터 테이블을 순차 스캔하므로 병렬 쿼리용 공유 메모리를 기본값(64MB)보다 넉넉하게 둔다
+    shm_size: 256mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    # 외부 포트는 열지 않는다. 접속은 docker compose exec postgres psql ... 로 한다
+
+volumes:
+  pgdata:
