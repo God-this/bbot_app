@@ -48,5 +48,8 @@ if [ "$TARGET" != "backend" ]; then
     --output "type=local,dest=$DEST" \
     front
   echo "$TAG" > "$DEST/version.txt"
+  # 내보낸 파일 중 index.html 등이 소유자 전용 권한으로 나올 수 있다.
+  # nginx 컨테이너(uid 101)와 S3 업로드에서 읽을 수 있도록 읽기 권한을 맞춘다.
+  chmod -R a+rX "$DEST"
   echo "✅ built $DEST"
 fi

@@ -6,11 +6,12 @@
 #   - --env-file이나 태그 없이 실행하면 필수 값이 없다는 오류로 중단된다
 #   - BACKEND_TAG: Docker Hub에 push한 bebot-backend 이미지 태그
 #   - FRONT_TAG: ./deploy/build.sh로 만든 dist/web-<sha> 폴더의 sha
+#   - FRONT_PORT: 호스트 포트 (기본 8080. emptycan은 80을 호스트 nginx가 사용 중)
 #
 # 외부에 열리는 포트는 frontend(nginx) 하나뿐이다.
-#   브라우저 → frontend:80 ─┬─ 정적 파일 (dist/web-<sha>)
-#                          └─ /api, /images → backend:8000 ─┬─ redis:6379
-#                                                           └─ postgres:5432
+#   브라우저 → 호스트:8080 → frontend:80 ─┬─ 정적 파일 (dist/web-<sha>)
+#                                        └─ /api, /images → backend:8000 ─┬─ redis:6379
+#                                                                         └─ postgres:5432
 name: bebot
 
 services:
@@ -63,7 +64,7 @@ services:
     image: nginx:1.27-alpine
     restart: unless-stopped
     ports:
-      - "${FRONT_PORT:-80}:80"
+      - "${FRONT_PORT:-8080}:80"
     volumes:
       - type: bind
         source: ./dist/web-${FRONT_TAG:?FRONT_TAG 필요 (dist/web-<sha>의 sha)}
