@@ -5,3 +5,4 @@
 venv/*
 venv/
 backend/requirements_mac.txt
+dist/
