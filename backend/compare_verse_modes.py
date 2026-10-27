@@ -1,20 +1,22 @@
 """
-compare_verse_modes.py — 성경 구절 검증 방식 비교 (code / tool / tool_nonet)
+compare_verse_modes.py — 성경 구절 검증 방식 비교 (code / judge)
 
 질문마다 LLM 답변을 **한 번만** 스트리밍으로 생성해 토큰과 도착 시각을 기록하고,
 같은 토큰 흐름에 각 검증 방식을 적용해 비교한다. (답변이 같아야 방식끼리 공정하게 비교된다)
 
-  code        : 코드로 바로 검증 (LLM 추가 호출 없음)
-  tool        : 구절이 있을 때만 LLM 툴콜링 검증 + code 안전장치
-  tool_nonet  : LLM 툴콜링 검증만 (안전장치 끔) — LLM 단독 성능 측정용
+  code   : 코드로 바로 검증 (LLM 추가 호출 없음) — 서비스 기본
+  judge  : code + 맥락·주소 판정을 답변에 반영 (VERSE_JUDGE_MODE=apply와 같은 동작)
+
+(2026-10-21 실험의 tool / tool_nonet 방식은 코드에서 제거됨 — 결과는 verse_compare_20261021.csv와
+ experiments/구절검증_방식비교_20261021.md에 남아 있다)
 
 캐시와 입력 가드레일은 거치지 않는다 (검색 → 답변 생성 → 검증만).
 성경 원문은 방식을 돌리기 전에 미리 캐시해, DB 접속 시간은 검증 시간에서 뺀다.
 
 사용
-  python compare_verse_modes.py                       # 내장 질문 20개, 세 방식 모두
+  python compare_verse_modes.py                       # 내장 질문 20개, 두 방식 모두
   python compare_verse_modes.py --limit 3             # 앞 3개만 (빠른 확인)
-  python compare_verse_modes.py --modes code,tool     # 방식 선택
+  python compare_verse_modes.py --modes code          # 방식 선택
   python compare_verse_modes.py --questions q.txt     # 한 줄에 질문 하나
   python compare_verse_modes.py --start 5 --limit 2 --out r.csv   # 5~6번만, r.csv에 이어 쓰기
 
@@ -39,7 +41,7 @@ import bible_verify
 from bible_verify import VerseStreamFilter, APPENDIX_HEADER
 from bbot_graph import (
     client, create_graph, recent_turns_to_history, resolve_question,
-    reasoning_kwargs, _verse_llm, LLM_MODEL,
+    reasoning_kwargs, _verse_judge, LLM_MODEL,
 )
 
 DEFAULT_QUESTIONS = [
@@ -72,7 +74,7 @@ DEFAULT_QUESTIONS = [
     "창조에 관한 성경 구절 세 개를 정확히 인용해 주세요",
 ]
 
-ALL_MODES = ["code", "tool", "tool_nonet"]
+ALL_MODES = ["code", "judge"]
 STATUSES = ["ok", "missing", "replaced", "quote_dropped"]
 
 
@@ -108,36 +110,31 @@ def generate_tokens(question: str) -> tuple[list[tuple[float, str]] | None, str]
 # ==================== 2. 같은 토큰 흐름에 검증 방식 적용 ====================
 
 def run_mode(tokens: list[tuple[float, str]], mode: str) -> dict:
-    real_mode = "tool" if mode.startswith("tool") else mode
-    saved_net = bible_verify.VERSE_TOOL_SAFETY_NET
-    bible_verify.VERSE_TOOL_SAFETY_NET = (mode != "tool_nonet")
-    try:
-        vf = VerseStreamFilter(mode=real_mode, llm=_verse_llm)
-        lag = 0.0                    # 필터 처리(DB 조회 등)에 쓴 누적 시간 → 출력이 그만큼 늦어짐
-        first_emit = None
-        immediate = 0
-        out_parts = []
-        for t, delta in tokens:
-            s = time.time()
-            out = vf.feed(delta)
-            lag += time.time() - s
-            if out:
-                first_emit = first_emit if first_emit is not None else t + lag
-                immediate += len(out)
-                out_parts.append(out)
+    vf = VerseStreamFilter(mode="code", judge=_verse_judge if mode == "judge" else None)
+    lag = 0.0                    # 필터 처리(DB 조회 등)에 쓴 누적 시간 → 출력이 그만큼 늦어짐
+    first_emit = None
+    immediate = 0
+    out_parts = []
+    for t, delta in tokens:
         s = time.time()
-        tail = vf.finish()
-        finish_time = time.time() - s
-        lag += finish_time
-        out_parts.append(tail)
-    finally:
-        bible_verify.VERSE_TOOL_SAFETY_NET = saved_net
+        out = vf.feed(delta)
+        lag += time.time() - s
+        if out:
+            first_emit = first_emit if first_emit is not None else t + lag
+            immediate += len(out)
+            out_parts.append(out)
+    s = time.time()
+    tail = vf.finish()
+    finish_time = time.time() - s
+    lag += finish_time
+    out_parts.append(tail)
 
     raw = "".join(d for _, d in tokens)
     final = "".join(out_parts)
     body = final.split("\n\n" + APPENDIX_HEADER)[0]
     gen_end = tokens[-1][0] if tokens else 0.0
     summary = vf.summary()
+    judge = summary.get("judge", {})
     counts = Counter(r["status"] for r in summary["code"])
     if first_emit is None:          # 바로 나간 글자가 없으면 검증이 끝난 뒤 첫 글자가 나감
         first_emit = gen_end + lag
@@ -150,9 +147,10 @@ def run_mode(tokens: list[tuple[float, str]], mode: str) -> dict:
         "바로출력비율": f"{min(immediate, len(body)) / max(len(body), 1):.0%}",
         "구절수(code판정)": len(summary["code"]),
         **{f"code_{k}": counts.get(k, 0) for k in STATUSES},
-        "tool상태": summary.get("tool_status", ""),
-        "도구호출수": len(summary.get("tool_calls", [])),
-        "도구호출내역": "; ".join(str(c.get("result") or c.get("error")) for c in summary.get("tool_calls", [])),
+        "판정상태": judge.get("status", ""),
+        "판정내역": "; ".join(f"{v['ref']}={v['verdict']}/{v['applied']}" for v in judge.get("verdicts", [])),
+        "도구호출수": len(judge.get("tool_calls", [])),
+        "도구호출내역": "; ".join(str(c.get("result") or c.get("error")) for c in judge.get("tool_calls", [])),
         "답변변경": "O" if final != raw else "",
         "원답변": raw,
         "최종답변": final,
@@ -174,7 +172,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--questions", help="질문 txt (한 줄에 하나)")
     ap.add_argument("--limit", type=int, default=0, help="앞에서 N개만 (0=전체)")
-    ap.add_argument("--modes", default=",".join(ALL_MODES), help="쉼표로 구분: code,tool,tool_nonet")
+    ap.add_argument("--modes", default=",".join(ALL_MODES), help="쉼표로 구분: code,judge")
     ap.add_argument("--start", type=int, default=1, help="N번째 질문부터 (나눠서 돌릴 때)")
     ap.add_argument("--out", help="결과 CSV 경로. 이미 있으면 이어서 쓴다 (나눠서 돌릴 때 하나로 모으기)")
     args = ap.parse_args()
@@ -217,7 +215,7 @@ def main():
                 rows.append({"번호": i, "질문": q, "방식": mode, "에러": str(e)})
 
     fields = ["번호", "질문", "방식", "생성시간", "첫글자", "완료시간", "검증시간", "바로출력비율",
-              "구절수(code판정)", *[f"code_{k}" for k in STATUSES], "tool상태", "도구호출수",
+              "구절수(code판정)", *[f"code_{k}" for k in STATUSES], "판정상태", "판정내역", "도구호출수",
               "도구호출내역", "답변변경", "에러", "원답변", "최종답변"]
     append = out_path.exists() and out_path.stat().st_size > 0
     with open(out_path, "a" if append else "w", encoding="utf-8" if append else "utf-8-sig", newline="") as f:

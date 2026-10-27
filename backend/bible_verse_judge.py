@@ -17,7 +17,7 @@ LLM은 답변 텍스트를 다시 쓰지 않는다. (지난 실험에서 텍스�
   not_found        존재하지 않는 구절 (코드가 처리)
 
 도구
-  get_bible_verses : 장절로 원문 조회 (bible_tool_verify와 같은 함수)
+  get_bible_verses : 장절로 원문 조회 (없는 구절이면 error)
   search_bible     : 키워드로 구절 찾기 (맞는 주소를 찾을 때)
 
 사용 모드 (VERSE_JUDGE_MODE)
@@ -31,10 +31,10 @@ import os
 import re
 
 from bible_verify import (
-    BIBLE_SOURCE, BOOKS, TRANSLATION, _file_chapters, _load_file,
-    _SUPERSCRIPTION_RE, apply_verdicts, find_citations, verify_answer,
+    BIBLE_SOURCE, BOOKS, TRANSLATION, _ABBR_TO_NO, _NAME_TO_NO, _file_chapters, _load_file,
+    _SUPERSCRIPTION_RE, apply_verdicts, chapter_exists, find_citations, get_verse,
+    verify_answer, verse_count,
 )
-from bible_tool_verify import get_bible_verses
 from logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -42,10 +42,55 @@ logger = get_logger(__name__)
 VERSE_JUDGE_MODE = os.getenv("VERSE_JUDGE_MODE", "shadow").lower()   # off / shadow(기본) / apply
 MAX_JUDGE_ROUNDS = 4
 MAX_SEARCH_RESULTS = 10
+MAX_VERSES_PER_CALL = 30     # get_bible_verses가 한 번에 돌려줄 최대 절 수
 VERDICTS = {"ok", "wrong_ref", "quote_wrong", "context_mismatch", "not_found"}
 
 
 # ==================== 도구 ====================
+
+def _resolve_book(book) -> int | None:
+    b = re.sub(r"\s", "", str(book or ""))
+    return _NAME_TO_NO.get(b) or _ABBR_TO_NO.get(b)
+
+
+def get_bible_verses(book, chapter, verse_start=None, verse_end=None) -> dict:
+    book_no = _resolve_book(book)
+    if book_no is None:
+        return {"error": f"알 수 없는 책 이름: {book}"}
+    try:
+        chapter = int(chapter)
+        vs = int(verse_start) if verse_start not in (None, "") else None
+        ve = int(verse_end) if verse_end not in (None, "") else vs
+    except (TypeError, ValueError):
+        return {"error": "chapter/verse는 정수여야 합니다."}
+    name = BOOKS[book_no - 1][1]
+    unit = "편" if book_no == 19 else "장"
+
+    if not chapter_exists(book_no, chapter):
+        return {"error": f"{name} {chapter}{unit}은(는) 존재하지 않습니다."}
+    count = verse_count(book_no, chapter)
+    if vs is None:
+        return {"reference": f"{name} {chapter}{unit}", "exists": True, "verse_count": count}
+
+    if ve < vs:
+        vs, ve = ve, vs
+    if vs < 1 or ve > count:
+        return {"error": f"{name} {chapter}:{vs}" + (f"-{ve}" if ve != vs else "")
+                + f"은(는) 존재하지 않습니다. ({name} {chapter}{unit}은 {count}절까지 있습니다)"}
+    end = min(ve, vs + MAX_VERSES_PER_CALL - 1)
+    verses = [
+        {"verse": v, "text": _SUPERSCRIPTION_RE.sub("", get_verse(book_no, chapter, v))}
+        for v in range(vs, end + 1)
+    ]
+    result = {
+        "reference": f"{name} {chapter}:{vs}" + (f"-{ve}" if ve != vs else ""),
+        "translation": TRANSLATION,
+        "verses": verses,
+    }
+    if end < ve:
+        result["truncated"] = True
+    return result
+
 
 def search_bible(keyword: str, book: str | None = None) -> dict:
     """키워드(공백으로 나누면 AND)가 모두 들어간 구절을 찾는다."""

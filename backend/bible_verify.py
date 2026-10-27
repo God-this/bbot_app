@@ -18,16 +18,15 @@ bible_verify.py — 생성된 답변 속 성경 구절을 개역한글 원문과
 책 이름)에서 출력을 잠시 붙잡았다가, 인용이 끝나면 검증한 결과를 내보낸다.
 구절이 아닌 것으로 판명되면 붙잡았던 글자를 그대로 내보낸다.
 
-검증 방식 두 가지 (VERSE_VERIFY_MODE)
-  - code : 위 4번을 코드가 바로 처리한다. LLM 호출 없음. (기본값)
-  - tool : 구절 검출은 코드가 하고, 검증은 LLM이 get_bible_verses 도구로 한다.
-           (bible_tool_verify.py) 절 단위 구절이 처음 나온 지점부터 답변 끝까지를
-           붙잡았다가, 답변이 끝나면 LLM 검증을 한 번 돌려 내보낸다.
-           LLM 결과는 다시 code 방식으로 한 번 더 걸러 안전장치로 쓴다
-           (VERSE_TOOL_SAFETY_NET=false로 끄면 LLM 검증 결과만 쓴다).
-           장만 언급한 구절(창세기 1장)은 대조할 본문이 없어 code 방식으로 바로 처리한다
-           — 창조 관련 답변 앞부분에 자주 나와서, 여기서 붙잡으면 답변 대부분이 멈춘다.
-  - off  : 검증하지 않는다.
+설정 (.env)
+  VERSE_VERIFY_MODE       code(기본) / off — 위 검증을 할지
+  APPEND_REFERENCE_VERSES true(기본) / false — 답변 끝 참고 구절
+  BIBLE_SOURCE            db(기본) / file — 원문을 DB에서 볼지 bible.txt에서 볼지
+  VERSE_JUDGE_MODE        shadow(기본) / apply / off — 맥락·주소 판정 (bible_verse_judge.py)
+  VERSE_CONTEXT_ACTION    log(기본) / remove — apply일 때 맥락이 안 맞는 인용 처리
+
+  (LLM이 답변 텍스트를 다시 쓰게 하던 tool 방식은 2026-10-21 비교 실험에서 출처·문단을
+   지우는 문제가 확인되어 제거했다 — experiments/구절검증_방식비교_20261021.md)
 
 맥락·주소 판정 (VERSE_JUDGE_MODE, bible_verse_judge.py) — code 방식 위에 얹는다
   1. 구절 검출 (코드)  2. 존재·본문 확인 (코드, 표시만)  3. 맥락·주소 판정 (LLM + 툴, 판정만 JSON)
@@ -36,7 +35,7 @@ bible_verify.py — 생성된 답변 속 성경 구절을 개역한글 원문과
 
 나중에 할 일
   - 없는 구절 대신 올바른 구절 찾아 넣기
-  - 구절이 답변 맥락에 맞는지 검증
+  - 맥락 판정 결과를 답변에 반영할지 결정 (지금은 shadow로 기록만)
 
 단독 실행:
     python bible_verify.py '"태초에 하나님이 천지를 창조하시니라" (창세기 1:1, 개역한글)'
@@ -53,9 +52,7 @@ from logging_config import get_logger
 
 logger = get_logger(__name__)
 
-ENABLE_VERSE_VERIFY = os.getenv("ENABLE_VERSE_VERIFY", "true").lower() == "true"
-VERSE_VERIFY_MODE = os.getenv("VERSE_VERIFY_MODE", "code").lower() if ENABLE_VERSE_VERIFY else "off"
-VERSE_TOOL_SAFETY_NET = os.getenv("VERSE_TOOL_SAFETY_NET", "true").lower() == "true"
+VERSE_VERIFY_MODE = os.getenv("VERSE_VERIFY_MODE", "code").lower()     # code / off
 APPEND_REFERENCE_VERSES = os.getenv("APPEND_REFERENCE_VERSES", "true").lower() == "true"
 
 MAX_TEXT_VERSES = 3      # 본문까지 다루는 최대 절 수 (이보다 길면 주소만 확인)
@@ -306,10 +303,7 @@ class VerseStreamFilter:
             out = vf.feed(delta)      # 지금 내보내도 되는 글자 (빈 문자열일 수 있음)
         out = vf.finish()             # 남은 글자 + 참고 구절
         vf.report                     # 구절별 검증 결과 (code 방식)
-        vf.summary()                  # 로그·Langfuse용 요약 (tool 방식이면 도구 호출 내역 포함)
-
-    tool 방식은 llm에 검증 함수를 넘긴다 — bible_tool_verify.make_llm_verifier(client, model)
-        llm(context=이미 내보낸 앞부분, segment=검증할 부분) -> (고친 segment, 도구 호출 내역)
+        vf.summary()                  # 로그·Langfuse용 요약 (판정을 쓰면 판정 내역 포함)
 
     맥락·주소 판정(apply)은 judge에 판정 함수를 넘긴다 — bible_verse_judge.make_judge(client, model)
         judge(text=전체 텍스트, citations=[Citation]) -> (판정 목록, 도구 호출 내역)
@@ -320,28 +314,25 @@ class VerseStreamFilter:
     """
 
     def __init__(self, append_references: bool = APPEND_REFERENCE_VERSES,
-                 mode: str | None = None, llm=None, judge=None):
+                 mode: str | None = None, judge=None):
         mode = (mode or VERSE_VERIFY_MODE).lower()
-        if mode == "tool" and llm is None:
-            logger.warning("[VerseCheck] tool 방식인데 LLM 검증 함수가 없어 code 방식으로 진행")
+        if mode not in ("code", "off", "label"):
+            logger.warning("[VerseCheck] 알 수 없는 VERSE_VERIFY_MODE=%s → code로 진행", mode)
             mode = "code"
         if judge is not None and mode != "code":
             logger.warning("[VerseCheck] 맥락·주소 판정은 code 방식에서만 쓴다 (현재 %s) → 판정 끔", mode)
             judge = None
         self.mode = mode
-        self.llm = llm
         self.judge = judge
         self.buf = ""
         self.prev_char = ""
         self.append_references = append_references
         self.report: list[dict] = []
-        # tool 방식 상태
+        # 판정(apply) 붙잡기 상태
         self.holding = False                     # 붙잡기 시작했는지
-        self.held = ""                           # 붙잡아 둔 원문 (LLM이 검증할 부분)
+        self.held = ""                           # 붙잡아 둔 원문 (판정할 부분)
         self._hold_raw = ""
-        self._emitted: list[str] = []            # 이미 내보낸 글자 (LLM에 맥락으로 줌)
-        self.tool_log: list[dict] = []
-        self.tool_status = ""                    # ok / fallback / error
+        self._emitted: list[str] = []            # 이미 내보낸 글자 (판정에 맥락으로 줌)
         self._shown: set[tuple] = set()          # 답변 안에 원문이 이미 보이는 구절
         self._shown_refs: list[Ref] = []
         self._appendix: list[Ref] = []           # 주소만 언급된 3절 이하 구절
@@ -370,7 +361,7 @@ class VerseStreamFilter:
             return out
         out = self._drain(final=True)
         if self.holding:
-            out += self._verify_held()
+            out += self._judge_held()
         if self.report:
             logger.info(
                 "[VerseCheck:%s] %s", self.mode,
@@ -380,8 +371,6 @@ class VerseStreamFilter:
 
     def summary(self) -> dict:
         s = {"mode": self.mode, "code": self.report}
-        if self.mode == "tool":
-            s.update(tool_status=self.tool_status or "not_called", tool_calls=self.tool_log)
         if self.judge is not None:
             s["judge"] = {
                 "status": self.judge_status or "not_called",
@@ -390,43 +379,19 @@ class VerseStreamFilter:
             }
         return s
 
-    # ---------- tool 방식 ----------
+    # ---------- 판정(apply) ----------
 
     def _start_hold(self, refs: list[Ref], raw: str) -> bool:
-        """tool 방식 / 판정(apply)에서 절 단위 구절이 처음 나오면 여기서부터 답변 끝까지 붙잡는다."""
-        if self.holding or not (self.mode == "tool" or self.judge is not None):
+        """판정(apply)에서 절 단위 구절이 처음 나오면 여기서부터 답변 끝까지 붙잡는다.
+        장만 언급한 구절(창세기 1장)은 대조할 본문이 없어 붙잡지 않는다
+        — 창조 관련 답변 앞부분에 자주 나와서, 여기서 붙잡으면 답변 대부분이 멈춘다."""
+        if self.holding or self.judge is None:
             return False
         if not any(r.v1 is not None for r in refs):
             return False
         self.holding = True
         self._hold_raw = raw
         return True
-
-    def _verify_held(self) -> str:
-        if self.judge is not None:
-            return self._judge_held()
-        segment, self.held = self.held, ""
-        context = "".join(self._emitted)
-        try:
-            verified, self.tool_log = self.llm(context=context, segment=segment)
-            self.tool_status = "ok"
-            if verified is None:            # LLM 결과를 못 믿을 때 검증 함수가 None을 준다
-                verified, self.tool_status = segment, "fallback"
-        except Exception as e:
-            logger.warning("[VerseCheck] LLM 검증 실패 → code 방식으로 대체: %s", e)
-            verified, self.tool_status = segment, "error"
-            self.tool_log = [{"error": str(e)}]
-
-        # 안전장치: LLM 결과를 code 방식으로 한 번 더 거른다. LLM이 실패한 경우에도 이걸로 검증된다.
-        if VERSE_TOOL_SAFETY_NET or self.tool_status != "ok":
-            net = VerseStreamFilter(append_references=False, mode="code")
-            net.prev_char = self.prev_char
-            verified = net.feed(verified) + net.finish()
-            self.report.extend(net.report)
-            self._appendix.extend(net._appendix)
-            self._shown |= net._shown
-            self._shown_refs.extend(net._shown_refs)
-        return verified
 
     def _judge_held(self) -> str:
         """붙잡은 부분: 구절 검출·표시(코드) → 맥락·주소 판정(LLM) → 수정(코드) → code 검증"""
@@ -494,7 +459,7 @@ class VerseStreamFilter:
                 c.shift(self._abs)
                 self.citations.append(c)
             self._new_cits = []
-            if self.holding:     # tool 방식: 이 구절부터 끝까지 LLM 검증으로 넘긴다
+            if self.holding:     # 판정(apply): 이 구절부터 끝까지 판정으로 넘긴다
                 self.held = lead + self._hold_raw + self.buf[consumed:]
                 self.buf = ""
                 break
@@ -831,9 +796,9 @@ def apply_verdicts(text: str, citations: list[Citation], verdicts: list[dict],
 
 
 def verify_answer(answer: str, append_references: bool = APPEND_REFERENCE_VERSES,
-                  mode: str | None = "code", llm=None) -> tuple[str, list[dict]]:
+                  mode: str | None = "code") -> tuple[str, list[dict]]:
     """스트리밍이 아닌 답변을 한 번에 검증. (검증된 답변, 구절별 결과)"""
-    vf = VerseStreamFilter(append_references=append_references, mode=mode, llm=llm)
+    vf = VerseStreamFilter(append_references=append_references, mode=mode)
     out = vf.feed(answer) + vf.finish()
     return out, vf.report
 

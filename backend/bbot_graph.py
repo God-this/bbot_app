@@ -24,7 +24,6 @@ from bbot_video import retrieve_video_segments
 from utils import detect_language, translate_to_english, extract_final_answer, reasoning_kwargs
 from moderation import is_safe_input, check_document_sufficiency
 from bible_verify import VerseStreamFilter, reverify_cached
-from bible_tool_verify import make_llm_verifier
 from bible_verse_judge import VERSE_JUDGE_MODE, make_judge, run_shadow
 import threading
 
@@ -92,10 +91,7 @@ except ImportError:
 
 client = get_client()
 
-# 성경 구절 검증 — VERSE_VERIFY_MODE=code(기본, 코드로 바로 검증) / tool(LLM 툴콜링 검증) / off
-# tool 방식에서만 아래 검증 함수가 쓰인다. (bible_verify.py, bible_tool_verify.py 참고)
-_verse_llm = make_llm_verifier(client, LLM_MODEL, name="verse-verify-tool", **reasoning_kwargs())
-
+# 성경 구절 검증 — VERSE_VERIFY_MODE=code(기본, 코드로 원문 대조) / off  (bible_verify.py 참고)
 # 성경 인용 맥락·주소 판정 — VERSE_JUDGE_MODE=shadow(기본, 전송 후 판정해 기록만) / apply(판정 반영) / off
 # (bible_verse_judge.py 참고. LLM은 판정만 하고 수정은 코드가 한다)
 _verse_judge = make_judge(client, LLM_MODEL, name="verse-judge", **reasoning_kwargs())
@@ -1023,7 +1019,7 @@ def _generate(question: str, use_cache: bool, source: str, recent_turns: list[di
     # 답변 속 성경 구절을 개역한글 원문과 대조한다
     # (없는 구절 제거, 틀린 본문 교체, 주소만 언급된 구절은 끝에 '참고 구절'로 추가)
     raw_answer = answer
-    verse_filter = VerseStreamFilter(llm=_verse_llm, judge=_filter_judge)
+    verse_filter = VerseStreamFilter(judge=_filter_judge)
     answer = verse_filter.feed(answer) + verse_filter.finish()
 
     logger.info("Integrated answer completed")
@@ -1145,7 +1141,7 @@ def _generate_stream(
 
     # 성경 구절 부분만 잠깐 붙잡았다가 원문과 대조한 뒤 내보낸다.
     # 나머지 글자는 지금처럼 받는 즉시 내보낸다. (bible_verify.py 참고)
-    verse_filter = VerseStreamFilter(llm=_verse_llm, judge=_filter_judge)
+    verse_filter = VerseStreamFilter(judge=_filter_judge)
 
     full_answer = ""
     raw_answer = ""          # 검증 전 LLM 원답변 (shadow 판정용)

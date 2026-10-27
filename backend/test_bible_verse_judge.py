@@ -12,7 +12,7 @@ from types import SimpleNamespace as NS
 from bible_verify import (
     VerseStreamFilter, find_citations, apply_verdicts, best_matching_span, verify_answer, APPENDIX_HEADER,
 )
-from bible_verse_judge import search_bible, judge_citations, make_judge, run_shadow
+from bible_verse_judge import get_bible_verses, search_bible, judge_citations, make_judge, run_shadow
 
 SAMPLE = ('서론입니다. 요한복음 3:16에서 말하듯 사랑하십니다. '
           '끝으로 "하나님이 보시기에 좋았더라" (창세기 1:31, 개역한글) 아멘. '
@@ -108,6 +108,15 @@ def test_apply_ignores_missing_and_quote_wrong_for_code():
 
 
 # ---------- 3단계: 판정 (LLM) ----------
+
+def test_get_bible_verses():
+    assert get_bible_verses("요한복음", 3, 16)["verses"][0]["text"].startswith("하나님이 세상을")
+    assert "error" in get_bible_verses("창세기", 51)
+    assert "error" in get_bible_verses("창세기", 1, 40)
+    assert get_bible_verses("시편", 23)["verse_count"] == 6
+    assert get_bible_verses("요", 3, 16)["reference"] == "요한복음 3:16"
+    assert "error" in get_bible_verses("베드로3서", 1)
+
 
 def test_search_bible_file():
     r = search_bible("보시기에 좋았더라", book="창세기")
