@@ -29,6 +29,11 @@ bible_verify.py — 생성된 답변 속 성경 구절을 개역한글 원문과
            — 창조 관련 답변 앞부분에 자주 나와서, 여기서 붙잡으면 답변 대부분이 멈춘다.
   - off  : 검증하지 않는다.
 
+맥락·주소 판정 (VERSE_JUDGE_MODE, bible_verse_judge.py) — code 방식 위에 얹는다
+  1. 구절 검출 (코드)  2. 존재·본문 확인 (코드, 표시만)  3. 맥락·주소 판정 (LLM + 툴, 판정만 JSON)
+  4. 수정 (코드: apply_verdicts → code 검증)
+  LLM은 텍스트를 다시 쓰지 않고 구절별 판정만 돌려준다. 실제 수정은 이 파일의 코드가 한다.
+
 나중에 할 일
   - 없는 구절 대신 올바른 구절 찾아 넣기
   - 구절이 답변 맥락에 맞는지 검증
@@ -39,6 +44,7 @@ bible_verify.py — 생성된 답변 속 성경 구절을 개역한글 원문과
 import os
 import re
 import threading
+import difflib
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -304,16 +310,27 @@ class VerseStreamFilter:
 
     tool 방식은 llm에 검증 함수를 넘긴다 — bible_tool_verify.make_llm_verifier(client, model)
         llm(context=이미 내보낸 앞부분, segment=검증할 부분) -> (고친 segment, 도구 호출 내역)
+
+    맥락·주소 판정(apply)은 judge에 판정 함수를 넘긴다 — bible_verse_judge.make_judge(client, model)
+        judge(text=전체 텍스트, citations=[Citation]) -> (판정 목록, 도구 호출 내역)
+        code 방식에서만 쓴다. 절 단위 구절이 처음 나온 지점부터 답변 끝까지 붙잡았다가
+        판정 → apply_verdicts → code 검증 순서로 처리해 내보낸다.
+
+    mode="label"은 아무것도 고치지 않고 구절 위치만 기록한다 (find_citations에서 사용).
     """
 
     def __init__(self, append_references: bool = APPEND_REFERENCE_VERSES,
-                 mode: str | None = None, llm=None):
+                 mode: str | None = None, llm=None, judge=None):
         mode = (mode or VERSE_VERIFY_MODE).lower()
         if mode == "tool" and llm is None:
             logger.warning("[VerseCheck] tool 방식인데 LLM 검증 함수가 없어 code 방식으로 진행")
             mode = "code"
+        if judge is not None and mode != "code":
+            logger.warning("[VerseCheck] 맥락·주소 판정은 code 방식에서만 쓴다 (현재 %s) → 판정 끔", mode)
+            judge = None
         self.mode = mode
         self.llm = llm
+        self.judge = judge
         self.buf = ""
         self.prev_char = ""
         self.append_references = append_references
@@ -328,6 +345,13 @@ class VerseStreamFilter:
         self._shown: set[tuple] = set()          # 답변 안에 원문이 이미 보이는 구절
         self._shown_refs: list[Ref] = []
         self._appendix: list[Ref] = []           # 주소만 언급된 3절 이하 구절
+        # label 모드 / 판정 상태
+        self._abs = 0                            # 원문에서 지금 buf[0]의 위치
+        self._new_cits: list["Citation"] = []
+        self.citations: list["Citation"] = []
+        self.judge_log: list[dict] = []
+        self.judge_status = ""                   # ok / error / no_citations
+        self.judge_tool_log: list[dict] = []
 
     # ---------- 공개 API ----------
 
@@ -358,13 +382,19 @@ class VerseStreamFilter:
         s = {"mode": self.mode, "code": self.report}
         if self.mode == "tool":
             s.update(tool_status=self.tool_status or "not_called", tool_calls=self.tool_log)
+        if self.judge is not None:
+            s["judge"] = {
+                "status": self.judge_status or "not_called",
+                "verdicts": self.judge_log,
+                "tool_calls": self.judge_tool_log,
+            }
         return s
 
     # ---------- tool 방식 ----------
 
     def _start_hold(self, refs: list[Ref], raw: str) -> bool:
-        """tool 방식에서 절 단위 구절이 처음 나오면 여기서부터 답변 끝까지 붙잡는다."""
-        if self.mode != "tool" or self.holding:
+        """tool 방식 / 판정(apply)에서 절 단위 구절이 처음 나오면 여기서부터 답변 끝까지 붙잡는다."""
+        if self.holding or not (self.mode == "tool" or self.judge is not None):
             return False
         if not any(r.v1 is not None for r in refs):
             return False
@@ -373,6 +403,8 @@ class VerseStreamFilter:
         return True
 
     def _verify_held(self) -> str:
+        if self.judge is not None:
+            return self._judge_held()
         segment, self.held = self.held, ""
         context = "".join(self._emitted)
         try:
@@ -396,6 +428,35 @@ class VerseStreamFilter:
             self._shown_refs.extend(net._shown_refs)
         return verified
 
+    def _judge_held(self) -> str:
+        """붙잡은 부분: 구절 검출·표시(코드) → 맥락·주소 판정(LLM) → 수정(코드) → code 검증"""
+        segment, self.held = self.held, ""
+        context = "".join(self._emitted)
+        full = context + segment
+        cits = [c for c in find_citations(full) if c.start >= len(context)]
+        applied = segment
+        if not cits:
+            self.judge_status = "no_citations"
+        else:
+            try:
+                verdicts, self.judge_tool_log = self.judge(text=full, citations=cits)
+                self.judge_status = "ok"
+                new_full, self.judge_log = apply_verdicts(full, cits, verdicts)
+                applied = new_full[len(context):]
+            except Exception as e:
+                logger.warning("[VerseJudge] 판정 실패 → code 방식으로 처리: %s", e)
+                self.judge_status = "error"
+                self.judge_tool_log = [{"error": str(e)}]
+        # 존재하지 않는 구절·틀린 본문 등 나머지는 code 방식 그대로 처리 (판정 실패 시에도 동일)
+        net = VerseStreamFilter(append_references=False, mode="code")
+        net.prev_char = self.prev_char
+        out = net.feed(applied) + net.finish()
+        self.report.extend(net.report)
+        self._appendix.extend(net._appendix)
+        self._shown |= net._shown
+        self._shown_refs.extend(net._shown_refs)
+        return out
+
     # ---------- 내부 ----------
 
     def _drain(self, final: bool) -> str:
@@ -408,6 +469,7 @@ class VerseStreamFilter:
                 keep = self.buf if final else self.buf.rstrip(" \t")
                 self._emit(out, keep)
                 self.buf = self.buf[len(keep):]
+                self._abs += len(keep)
                 break
             lead = ""
             if kind in ("quote", "paren"):
@@ -419,12 +481,19 @@ class VerseStreamFilter:
                 head = self.buf[:t]
             self._emit(out, head)
             self.buf = self.buf[t:]
+            self._abs += t
             handler = {"quote": self._handle_quote, "paren": self._handle_paren, "book": self._handle_book}[kind]
             res = handler(final)
             if res is None:      # 더 기다려야 함
                 self.buf = lead + self.buf
+                self._abs -= len(lead)
+                self._new_cits = []
                 break
             text, consumed = res
+            for c in self._new_cits:     # label 모드: 상대 위치 → 원문 위치
+                c.shift(self._abs)
+                self.citations.append(c)
+            self._new_cits = []
             if self.holding:     # tool 방식: 이 구절부터 끝까지 LLM 검증으로 넘긴다
                 self.held = lead + self._hold_raw + self.buf[consumed:]
                 self.buf = ""
@@ -432,6 +501,7 @@ class VerseStreamFilter:
             if text:             # 통째로 지워진 인용이면 앞 공백도 함께 버린다
                 self._emit(out, lead + text)
             self.buf = self.buf[consumed:]
+            self._abs += consumed
         return "".join(out)
 
     def _emit(self, out: list[str], text: str) -> None:
@@ -461,6 +531,10 @@ class VerseStreamFilter:
             if not final and _CONTINUATION_RE.fullmatch(rest) and len(rest) < 12:
                 return None
             ref = parse_ref(m)
+            if self.mode == "label":
+                self._new_cits.append(Citation(kind="inline", ref=ref, raw=m.group(0),
+                                               start=0, end=m.end(), ref_start=0, ref_end=m.end()))
+                return m.group(0), m.end()
             if self._start_hold([ref], m.group(0)):
                 return "", m.end()
             if ref_exists(ref):
@@ -487,6 +561,13 @@ class VerseStreamFilter:
         inner = s[1:e]
         if not REF_RE.match(inner.lstrip()):
             return "(", 1
+        if self.mode == "label":
+            group = list(REF_RE.finditer(inner))
+            for m in group:
+                self._new_cits.append(Citation(kind="paren", ref=parse_ref(m), raw=s[: e + 1],
+                                               start=0, end=e + 1, ref_start=1 + m.start(),
+                                               ref_end=1 + m.end(), group_size=len(group)))
+            return s[: e + 1], e + 1
         if self._start_hold([parse_ref(m) for m in REF_RE.finditer(inner)], s[: e + 1]):
             return "", e + 1
         return self._process_paren(inner), e + 1
@@ -534,6 +615,12 @@ class VerseStreamFilter:
         m = REF_RE.match(inner.lstrip())
         if not m:
             return s[: j + 1], j + 1
+        if self.mode == "label":
+            off = k + 1 + (len(inner) - len(inner.lstrip()))
+            self._new_cits.append(Citation(kind="quoted", ref=parse_ref(m), raw=s[: e + 1],
+                                           start=0, end=e + 1, ref_start=off, ref_end=off + m.end(),
+                                           quote=s[1:j], quote_start=1, quote_end=j, paren_start=k))
+            return s[: e + 1], e + 1
         if self._start_hold([parse_ref(m)], s[: e + 1]):
             return "", e + 1
         quote = s[1:j]
@@ -594,6 +681,153 @@ class VerseStreamFilter:
         if not lines:
             return ""
         return "\n\n" + APPENDIX_HEADER + "\n" + "\n".join(lines)
+
+
+# ==================== 구절 위치·표시 (판정용) ====================
+
+@dataclass
+class Citation:
+    """답변 속 구절 인용 하나. 위치는 원문 텍스트 기준 [start, end)."""
+    kind: str                    # quoted / paren / inline
+    ref: Ref
+    raw: str
+    start: int
+    end: int
+    ref_start: int
+    ref_end: int
+    quote: str | None = None
+    quote_start: int | None = None
+    quote_end: int | None = None
+    paren_start: int | None = None
+    group_size: int = 1          # 괄호 하나에 여러 구절이 있을 때 그 수
+    id: int = 0
+    # 2단계(코드) 표시
+    exists: bool = False
+    quote_match: bool | None = None   # 인용문이 없거나 장만 언급이면 None
+    original: str = ""
+    context: str = ""
+
+    def shift(self, base: int) -> None:
+        self.start += base
+        self.end += base
+        self.ref_start += base
+        self.ref_end += base
+        if self.quote_start is not None:
+            self.quote_start += base
+            self.quote_end += base
+        if self.paren_start is not None:
+            self.paren_start += base
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "kind": self.kind, "ref": self.ref.label, "written": self.raw,
+            "quote": self.quote, "exists": self.exists, "quote_match": self.quote_match,
+            "original": self.original, "context": self.context,
+        }
+
+
+_SENT_END = ".!?\n"
+
+
+def _context_of(text: str, start: int, end: int, max_len: int = 300) -> str:
+    """구절이 들어 있는 문장 + 바로 앞 문장"""
+    left = max((text.rfind(ch, 0, start) for ch in _SENT_END), default=-1)
+    left2 = max((text.rfind(ch, 0, left) for ch in _SENT_END), default=-1) if left > 0 else -1
+    rights = [i for i in (text.find(ch, end) for ch in _SENT_END) if i != -1]
+    right = min(rights) + 1 if rights else len(text)
+    lo = max(left2 + 1, start - max_len)
+    hi = min(right, end + max_len)
+    return text[lo:hi].strip()
+
+
+def find_citations(text: str) -> list[Citation]:
+    """텍스트 속 구절 인용을 찾아 위치와 코드 확인 결과(존재·본문 일치·원문)를 붙인다. 고치지 않는다."""
+    vf = VerseStreamFilter(append_references=False, mode="label")
+    vf.feed(text)
+    vf.finish()
+    for i, c in enumerate(vf.citations, start=1):
+        c.id = i
+        c.exists = ref_exists(c.ref)
+        if c.exists and c.ref.v1 is not None:
+            c.original = ref_text(c.ref) if c.ref.is_short else ref_range_text(c.ref)[:500]
+            if c.quote is not None:
+                c.quote_match = quote_matches(c.quote, c.original if c.ref.is_short else ref_range_text(c.ref))
+        c.context = _context_of(text, c.start, c.end)
+    return vf.citations
+
+
+def best_matching_span(quote: str, original: str, threshold: float = 0.75) -> str | None:
+    """원문에서 인용문과 가장 비슷한 연속 구간(어절 단위)을 찾는다. 비슷하지 않으면 None."""
+    q = _norm_text(quote)
+    words = original.split()
+    if not q or not words:
+        return None
+    n = len(quote.split())
+    best, best_ratio = None, 0.0
+    for i in range(len(words)):
+        for j in range(i + 1, min(len(words), i + n + 3) + 1):
+            cand = " ".join(words[i:j])
+            r = difflib.SequenceMatcher(None, q, _norm_text(cand)).ratio()
+            if r > best_ratio:
+                best, best_ratio = cand, r
+    return best if best_ratio >= threshold else None
+
+
+VERSE_CONTEXT_ACTION = os.getenv("VERSE_CONTEXT_ACTION", "log").lower()   # log / remove
+
+
+def apply_verdicts(text: str, citations: list[Citation], verdicts: list[dict],
+                   context_action: str | None = None) -> tuple[str, list[dict]]:
+    """LLM 판정 중 코드가 확인할 수 있는 것만 텍스트에 반영한다. (4단계, 코드)
+
+    - wrong_ref + 추천 주소: 추천 주소가 존재하고 인용문이 그 원문과 비슷할 때만
+      주소를 바꾸고, 인용문은 새 원문의 해당 구간으로 맞춘다.
+    - context_mismatch: context_action=remove일 때만 인용을 지운다 (기본 log: 기록만).
+    - 그 밖(없는 구절, 틀린 본문 등)은 손대지 않는다 → 이후 code 검증이 처리한다.
+    반환: (새 텍스트, 구절별 처리 기록)
+    """
+    action = (context_action or VERSE_CONTEXT_ACTION).lower()
+    by_id = {v.get("id"): v for v in verdicts if isinstance(v, dict)}
+    edits: list[tuple[int, int, str]] = []
+    log: list[dict] = []
+    for c in citations:
+        v = by_id.get(c.id, {})
+        verdict = str(v.get("verdict") or "ok")
+        entry = {"id": c.id, "ref": c.ref.label, "verdict": verdict,
+                 "suggested_ref": v.get("suggested_ref"), "reason": v.get("reason", ""), "applied": "none"}
+        if not c.exists:
+            entry["applied"] = "code(missing)"
+        elif verdict == "wrong_ref" and v.get("suggested_ref"):
+            m = REF_RE.search(str(v["suggested_ref"]))
+            new = parse_ref(m) if m else None
+            if new is None or not ref_exists(new) or new.v1 is None or not new.is_short:
+                entry["applied"] = "rejected(추천 주소가 없거나 범위가 김)"
+            elif c.quote is None:
+                entry["applied"] = "logged(인용문이 없어 확인 불가)"
+            else:
+                span = best_matching_span(c.quote, ref_text(new))
+                if span is None:
+                    entry["applied"] = "rejected(인용문이 추천 구절과 다름)"
+                else:
+                    edits.append((c.ref_start, c.ref_end, new.label))
+                    edits.append((c.quote_start, c.quote_end, span))
+                    entry["applied"] = f"ref→{new.label}"
+        elif verdict == "context_mismatch":
+            if action == "remove" and c.group_size == 1:
+                start = c.start
+                while start > 0 and text[start - 1] in " \t" and c.kind != "inline":
+                    start -= 1
+                edits.append((start, c.end, MISSING_INLINE_REPLACEMENT if c.kind == "inline" else ""))
+                entry["applied"] = "removed"
+            else:
+                entry["applied"] = "logged"
+        log.append(entry)
+
+    for start, end, rep_text in sorted(edits, key=lambda e: e[0], reverse=True):
+        text = text[:start] + rep_text + text[end:]
+    if log:
+        logger.info("[VerseJudge] %s", ", ".join(f"{e['ref']}={e['verdict']}/{e['applied']}" for e in log))
+    return text, log
 
 
 def verify_answer(answer: str, append_references: bool = APPEND_REFERENCE_VERSES,

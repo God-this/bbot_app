@@ -25,6 +25,8 @@ from utils import detect_language, translate_to_english, extract_final_answer, r
 from moderation import is_safe_input, check_document_sufficiency
 from bible_verify import VerseStreamFilter, reverify_cached
 from bible_tool_verify import make_llm_verifier
+from bible_verse_judge import VERSE_JUDGE_MODE, make_judge, run_shadow
+import threading
 
 import re
 
@@ -93,6 +95,19 @@ client = get_client()
 # 성경 구절 검증 — VERSE_VERIFY_MODE=code(기본, 코드로 바로 검증) / tool(LLM 툴콜링 검증) / off
 # tool 방식에서만 아래 검증 함수가 쓰인다. (bible_verify.py, bible_tool_verify.py 참고)
 _verse_llm = make_llm_verifier(client, LLM_MODEL, name="verse-verify-tool", **reasoning_kwargs())
+
+# 성경 인용 맥락·주소 판정 — VERSE_JUDGE_MODE=shadow(기본, 전송 후 판정해 기록만) / apply(판정 반영) / off
+# (bible_verse_judge.py 참고. LLM은 판정만 하고 수정은 코드가 한다)
+_verse_judge = make_judge(client, LLM_MODEL, name="verse-judge", **reasoning_kwargs())
+_filter_judge = _verse_judge if VERSE_JUDGE_MODE == "apply" else None
+
+
+@observe(name="verse-judge-shadow", capture_input=False)
+def _verse_judge_shadow(raw_answer: str, served_answer: str) -> dict:
+    """shadow 모드: 사용자 응답이 끝난 뒤 판정해서 Langfuse·로그에만 남긴다."""
+    result = run_shadow(raw_answer, _verse_judge, served_answer=served_answer)
+    get_langfuse_client().update_current_span(input={"raw_answer": raw_answer}, output=result)
+    return result
 
 # LangGraph/LangChain 실행을 자동으로 Langfuse에 트레이싱하는 콜백 핸들러.
 # graph.invoke()의 config에 넣어주면 route/retrieve/judge/rewrite 노드가
@@ -1007,7 +1022,8 @@ def _generate(question: str, use_cache: bool, source: str, recent_turns: list[di
 
     # 답변 속 성경 구절을 개역한글 원문과 대조한다
     # (없는 구절 제거, 틀린 본문 교체, 주소만 언급된 구절은 끝에 '참고 구절'로 추가)
-    verse_filter = VerseStreamFilter(llm=_verse_llm)
+    raw_answer = answer
+    verse_filter = VerseStreamFilter(llm=_verse_llm, judge=_filter_judge)
     answer = verse_filter.feed(answer) + verse_filter.finish()
 
     logger.info("Integrated answer completed")
@@ -1029,6 +1045,10 @@ def _generate(question: str, use_cache: bool, source: str, recent_turns: list[di
 
     cached = persist_answer_cache(use_cache, normalized_question, resolved_question, answer, sources)
     enqueue_answer_eval(cached, normalized_question, resolved_question, answer, reranked_docs)
+
+    if VERSE_JUDGE_MODE == "shadow":
+        # 응답을 늦추지 않도록 판정은 별도 스레드에서
+        threading.Thread(target=_verse_judge_shadow, args=(raw_answer, answer), daemon=True).start()
 
     return answer, sources, resolved_question
 
@@ -1125,9 +1145,10 @@ def _generate_stream(
 
     # 성경 구절 부분만 잠깐 붙잡았다가 원문과 대조한 뒤 내보낸다.
     # 나머지 글자는 지금처럼 받는 즉시 내보낸다. (bible_verify.py 참고)
-    verse_filter = VerseStreamFilter(llm=_verse_llm)
+    verse_filter = VerseStreamFilter(llm=_verse_llm, judge=_filter_judge)
 
     full_answer = ""
+    raw_answer = ""          # 검증 전 LLM 원답변 (shadow 판정용)
     for chunk in stream:
         # stream_options={"include_usage": True}를 나중에 켜서 토큰 사용량을
         # 트레이싱하게 되면, 마지막에 choices가 빈 청크가 하나 더 오므로
@@ -1136,6 +1157,7 @@ def _generate_stream(
             continue
         delta = chunk.choices[0].delta.content
         if delta:
+            raw_answer += delta
             out = verse_filter.feed(delta)
             if out:
                 full_answer += out
@@ -1174,3 +1196,11 @@ def _generate_stream(
     # 두 작업 모두 fail-open이므로 실패해도 스트림에 영향을 주지 않는다.
     cached = persist_answer_cache(use_cache, normalized_question, resolved_question, full_answer, sources)
     enqueue_answer_eval(cached, normalized_question, resolved_question, full_answer, reranked_docs)
+
+    # ---------- 맥락·주소 판정 (shadow) ----------
+    # 사용자 응답은 이미 끝났다. 판정 결과는 답변에 반영하지 않고 기록만 한다.
+    if VERSE_JUDGE_MODE == "shadow":
+        try:
+            _verse_judge_shadow(raw_answer, full_answer)
+        except Exception as e:
+            logger.warning("[VerseJudge:shadow] 실패: %s", e)
