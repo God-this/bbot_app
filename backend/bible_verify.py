@@ -163,16 +163,18 @@ _BOOK_ALT = "|".join(_BOOK_NAMES)
 _DASH = r"[-~–—]"
 
 # 지원 표기: 요한복음 3:16 / 창세기 1:1-3 / 창세기 1:31-2:3 / 창세기 5장 / 창세기 1장 6절 / 창세기 1장 6-8절 / 시편 23편 1절
+#           / 창세기 9장 12절에서 17절(까지)
 REF_RE = re.compile(
     rf"(?P<book>{_BOOK_ALT})\s*(?P<ch>\d{{1,3}})\s*"
     r"(?:"
     rf"[:：]\s*(?P<v1>\d{{1,3}})(?:\s*{_DASH}\s*(?:(?P<ch2>\d{{1,3}})\s*[:：]\s*)?(?P<v2>\d{{1,3}}))?"
     r"|"
-    rf"[장편](?:\s*(?P<kv1>\d{{1,3}})\s*절?(?:\s*{_DASH}\s*(?P<kv2>\d{{1,3}}))?\s*절)?"
+    rf"[장편](?:\s*(?P<kv1>\d{{1,3}})\s*절?(?:\s*(?:{_DASH}|에서)\s*(?P<kv2>\d{{1,3}}))?\s*절)?"
     r")"
 )
 # 구절 표기가 아직 이어질 수 있는 글자 (이것만 뒤에 왔으면 더 기다린다)
-_CONTINUATION_RE = re.compile(rf"[\s\d:：장편절]*(?:{_DASH}[\s\d:：장편절]*)?")
+# "9장 12절에서 17절까지"처럼 '에서'로 범위를 잇는 경우도 기다린다
+_CONTINUATION_RE = re.compile(rf"[\s\d:：장편절]*(?:(?:{_DASH}|에서?)[\s\d:：장편절]*)?")
 # 책 이름이 막 쓰이는 중일 수 있는 접두어 ('요한' → 요한복음/요한일서…)
 _BOOK_PREFIXES = {name[:k] for name in _NAME_TO_NO for k in range(1, len(name) + 1)}
 _BOOK_FIRST_CHARS = {name[0] for name in _NAME_TO_NO}

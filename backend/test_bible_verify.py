@@ -112,6 +112,13 @@ def test_reverify_cached_is_idempotent():
     assert reverify_cached(once) == once           # 이미 검증된 답변 → 그대로 (참고 구절 중복 없음)
     assert once.count(APPENDIX_HEADER) == 1
 
+def test_korean_range_with_eseo():
+    out = check("창세기 1장 26절에서 27절에 기록되어 있습니다.", statuses=["ok"])
+    assert "창세기 1:26-27 —" in out
+    check("창세기 9장 12절에서 17절까지의 말씀에 따르면", statuses=["ok"])   # 6절 범위 → 참고 구절 없음
+    out = check("창세기 1장 5절에서 말하듯 첫째 날입니다.", statuses=["ok"])
+    assert "창세기 1:5 —" in out and out.startswith("창세기 1장 5절에서 말하듯")
+
 def test_unclosed_quote_flushes():
     t = '그는 "끝나지 않은 인용'
     assert check(t) == t
