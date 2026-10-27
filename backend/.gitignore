@@ -9,3 +9,5 @@ venv/
 
 eval_data.xlsx
 ~$*.xlsx
+
+bible.txt
