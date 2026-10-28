@@ -1,8 +1,11 @@
 .DS_Store
 .env
+.env.*
+!.env.example
 venv/*
 venv/
 backend/requirements_mac.txt
+dist/
 
 # 로컬 테스트/평가 산출물
 backend/bible.txt
