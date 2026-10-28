@@ -1,6 +1,6 @@
 import os
 from config import get_conn
-from llm_factory import get_embedding
+from llm_factory import get_embedding, embed_query
 
 embedding_model = get_embedding()
 
@@ -11,7 +11,7 @@ def _to_image_url(file_path: str) -> str:
 
 
 def retrieve_pages(question: str, top_k: int = 5):
-    q_emb = embedding_model.embed_query(question)
+    q_emb = embed_query(embedding_model, question, "embed-book-query")
 
     with get_conn() as conn:
         with conn.cursor() as cur:

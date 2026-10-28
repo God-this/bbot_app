@@ -30,7 +30,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from auth import router as auth_router, chat_router, get_current_user, require_admin, save_chat_message
+from auth import router as auth_router, chat_router, get_current_user, require_admin, save_chat_message, get_recent_turns
 from rate_limiter import check_rate_limit
 
 app = FastAPI(title="BeBot API", version="2.0.0")
@@ -143,6 +143,15 @@ async def health():
 # 채팅 엔드포인트 (JWT 인증 필수)
 # ──────────────────────────────────────────────────────────
 
+async def _load_recent_turns(user_id: int, session_id: int | None) -> list[dict]:
+    """가드레일용 최근 대화 조회. 실패해도 답변 생성은 막지 않는다(fail-open)."""
+    try:
+        return await asyncio.to_thread(get_recent_turns, user_id, session_id)
+    except Exception as e:
+        logger.warning("최근 대화 조회 실패: %s", e)
+        return []
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(
     req:  ChatRequest,
@@ -156,12 +165,17 @@ async def chat(
     try:
         from bbot_graph import generate
 
-        answer, sources_raw = await asyncio.to_thread(
+        recent_turns = await _load_recent_turns(user["user_id"], req.session_id)
+
+        # 질문 재구성까지 generate 안에서 해야 같은 Langfuse 트레이스에 기록된다.
+        # 바꾼 질문은 다음 질문의 맥락으로 쓰기 위해 함께 저장한다.
+        answer, sources_raw, resolved_question = await asyncio.to_thread(
             generate,
             req.question.strip(),
             thread_id=str(user["user_id"]),
             user_id=str(user["user_id"]),
             source="api",
+            recent_turns=recent_turns,
         )
 
         raw = sources_raw if isinstance(sources_raw, dict) else {}
@@ -186,6 +200,7 @@ async def chat(
                 answer     = answer,
                 sources    = raw,
                 session_id = req.session_id,
+                resolved_question = resolved_question,
             )
         except Exception as save_err:
             logger.warning("채팅 기록 저장 실패: %s", save_err)
@@ -216,13 +231,27 @@ async def chat_stream(
 
     from bbot_graph import generate_stream
 
+    recent_turns = await _load_recent_turns(user["user_id"], req.session_id)
+
     async def event_generator():
+        # 질문 재구성까지 generate_stream 안에서 해야 같은 Langfuse 트레이스에 기록된다
         gen = generate_stream(
             req.question.strip(),
             thread_id=str(user["user_id"]),
             user_id=str(user["user_id"]),
             source="api",
+            recent_turns=recent_turns,
         )
+
+        # 첫 이벤트는 바꾼 질문([RESOLVED])이다. 다음 질문의 맥락으로 쓰기 위해 함께 저장하며,
+        # 클라이언트로는 보내지 않는다. 재구성 LLM 호출이 이벤트 루프를 막지 않게 스레드에서 받는다.
+        resolved_question = req.question.strip()
+        first = await asyncio.to_thread(next, gen, None)
+        if first and first.startswith("data: [RESOLVED]"):
+            try:
+                resolved_question = json.loads(first.replace("data: [RESOLVED]", "", 1).strip())
+            except Exception:
+                pass
 
         full_answer = ""
         sources_raw = {}
@@ -239,6 +268,7 @@ async def chat_stream(
                     full_answer,
                     sources_raw,
                     req.session_id,
+                    resolved_question,
                 )
                 return (
                     f"data: [SESSION]{session_id}\n\n"

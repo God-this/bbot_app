@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme.dart';
 import '../services/auth_provider.dart';
+import '../widgets/bebot_logo.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -80,19 +81,7 @@ class _LoginScreenState extends State<LoginScreen> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 // 로고
-                Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    color: AppColors.primarySurface,
-                    borderRadius: BorderRadius.circular(24),
-                  ),
-                  child: const Icon(
-                    Icons.smart_toy_rounded,
-                    size: 44,
-                    color: AppColors.primaryDark,
-                  ),
-                ),
+                const BebotLogo(size: 80),
                 const SizedBox(height: 20),
                 Text(
                   'BeBot',

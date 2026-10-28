@@ -208,6 +208,7 @@ async def google_login(req: GoogleLoginRequest):
     return {
         "access_token": token,
         "token_type":   "bearer",
+        "provider":     "google",
         "user_id":      user["id"],
         "role":         user["role"],
         "nickname":     user["nickname"],
@@ -242,6 +243,7 @@ async def guest_login(req: GuestLoginRequest):
     return {
         "access_token": token,
         "token_type":   "bearer",
+        "provider":     "guest",
         "user_id":      user["id"],
         "role":         user["role"],
         "nickname":     user["nickname"],
@@ -292,6 +294,7 @@ async def _naver_login_with_access_token(access_token: str) -> dict:
     return {
         "access_token": token,
         "token_type":   "bearer",
+        "provider":     "naver",
         "user_id":      user["id"],
         "role":         user["role"],
         "nickname":     user["nickname"],
@@ -378,6 +381,7 @@ async def _kakao_login_with_access_token(access_token: str) -> dict:
     return {
         "access_token": token,
         "token_type":   "bearer",
+        "provider":     "kakao",
         "user_id":      user["id"],
         "role":         user["role"],
         "nickname":     user["nickname"],
@@ -497,8 +501,12 @@ def save_chat_message(
     answer:     str,
     sources:    dict,
     session_id: int | None = None,
+    resolved_question: str | None = None,
 ):
     """질문(user) + 답변(assistant)을 chat_messages에 저장합니다.
+    resolved_question: 직전 대화를 반영해 단독으로 이해되게 바꾼 질문. 다음 질문을 바꿀 때
+        원문 대신 쓰여서 후속 질문이 여러 번 이어져도 맥락이 유지된다 (get_recent_turns 참고).
+        마이그레이션: ALTER TABLE chat_messages ADD COLUMN resolved_question TEXT NULL
     Returns: (session_id, assistant message id)
     """
     session_id = get_or_create_session(user_id, question, session_id)
@@ -506,9 +514,9 @@ def save_chat_message(
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO chat_messages (session_id, role, content)
-                VALUES (%s, 'user', %s)
-            """, (session_id, question))
+                INSERT INTO chat_messages (session_id, role, content, resolved_question)
+                VALUES (%s, 'user', %s, %s)
+            """, (session_id, question, resolved_question))
 
             clean_sources = {
                 k: v for k, v in sources.items()
@@ -558,6 +566,29 @@ def get_sessions(
         }
         for r in rows
     ]
+
+
+def get_recent_turns(user_id: int, session_id: int | None, turns: int = 1) -> list[dict]:
+    """질문 재구성·가드레일용 최근 대화(user/assistant 메시지 turns*2개)를 시간순으로 반환.
+    user 메시지는 바꿔 저장해 둔 질문(resolved_question)을 우선 쓴다 — 그래서 직전 1턴만으로도
+    맥락이 이어지고, 여러 턴을 넣었을 때 다른 대상이 섞이는 문제를 피한다.
+    세션이 없거나 다른 사용자의 세션이면 빈 리스트."""
+    if session_id is None:
+        return []
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT m.role, COALESCE(m.resolved_question, m.content)
+                FROM chat_messages m
+                JOIN chat_sessions s ON s.id = m.session_id
+                WHERE m.session_id = %s AND s.user_id = %s
+                ORDER BY m.created_at DESC, m.id DESC
+                LIMIT %s
+            """, (session_id, user_id, turns * 2))
+            rows = cur.fetchall()
+
+    return [{"role": r[0], "content": r[1]} for r in reversed(rows)]
 
 
 @chat_router.get("/sessions/{session_id}/messages")

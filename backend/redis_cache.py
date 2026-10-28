@@ -3,7 +3,7 @@ import os
 
 import redis
 from sklearn.metrics.pairwise import cosine_similarity
-from llm_factory import get_embedding as _get_embedding_model
+from llm_factory import get_embedding as _get_embedding_model, embed_query
 from logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -52,8 +52,9 @@ def _tombstone_key(normalized_question: str) -> str:
 
 # ==================== 임베딩 ====================
 
-def get_embedding(text):
-    return embedding_model.embed_query(text)
+def get_embedding(text, name: str = "embed-cache"):
+    """name은 Langfuse에 기록되는 이름 — 캐시 조회/저장 중 어느 호출인지 구분하는 데 쓴다."""
+    return embed_query(embedding_model, text, name)
 
 
 # ==================== 저장 (write 1회) ====================
@@ -92,7 +93,7 @@ def save_answer_cache(normalized_question: str, original_question: str, answer_d
         )
         return False
 
-    embedding = get_embedding(original_question)
+    embedding = get_embedding(original_question, "embed-cache-save")
 
     payload = {
         "schema_version": SCHEMA_VERSION,
@@ -163,7 +164,7 @@ def search_semantic_cache(query: str, threshold: float = 0.96):
     아직 품질 평가를 받지 않은(pending) 항목은 PENDING_SEMANTIC_EXCLUDED가
     켜져 있을 때 semantic 후보에서 제외된다 — exact match로만 서빙된다.
     """
-    query_embedding = get_embedding(query)
+    query_embedding = get_embedding(query, "embed-cache-lookup")
     query_dim = len(query_embedding)
 
     best_score = 0
