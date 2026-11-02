@@ -65,9 +65,9 @@ dc() {
 }
 
 preflight() {
-  [ -n "$BACKEND_TAG" ] || die "backend 이미지를 찾지 못했습니다. BACKEND_TAG=<sha> 로 지정하세요."
-  [ -n "$FRONT_TAG" ] || die "dist/web-* 가 없습니다. TARGET=front ./deploy/build.sh 로 먼저 빌드하세요."
-  [ -d "dist/web-$FRONT_TAG" ] || die "dist/web-$FRONT_TAG 가 없습니다."
+  docker compose version >/dev/null 2>&1 || die "docker compose(v2 플러그인)가 없습니다."
+  docker info >/dev/null 2>&1 \
+    || die "Docker 데몬에 접속할 수 없습니다. 데몬이 떠 있는지, 현재 사용자가 docker 그룹에 있는지 확인하세요."
 
   # 빈 값이면 기동 중 int("")로 죽는 키 (config.py, redis_cache.py)
   local key
@@ -76,6 +76,36 @@ preflight() {
       die "$ENV_FILE 의 ${key}= 가 빈 값입니다. 줄을 지우거나 값을 넣으세요."
     fi
   done
+
+  # 비어 있으면 기동은 되지만 기능이 깨지는 키 (.env.staging.example의 [필수])
+  local missing=()
+  for key in OPENAI_API_KEY DB_PASSWORD JWT_SECRET_KEY \
+             NAVER_CLIENT_ID NAVER_CLIENT_SECRET KAKAO_REST_API_KEY KAKAO_CLIENT_SECRET; do
+    grep -qE "^${key}=[[:space:]]*[^[:space:]]" "$ENV_FILE" || missing+=("$key")
+  done
+  [ ${#missing[@]} -eq 0 ] || die "$ENV_FILE 에 [필수] 값이 비어 있습니다: ${missing[*]}"
+
+  # compose는 --env-file의 값도 읽지만 이 스크립트는 셸 값만 보므로, 넣어 두면 둘이 다른 저장소를 쓰게 된다
+  if grep -qE "^BACKEND_IMAGE=" "$ENV_FILE"; then
+    die "BACKEND_IMAGE는 $ENV_FILE 이 아니라 셸에서 지정하세요 (BACKEND_IMAGE=... ./deploy/staging.sh up)."
+  fi
+
+  [ -n "$BACKEND_TAG" ] || die "backend 이미지를 찾지 못했습니다. BACKEND_TAG=<sha> 로 지정하세요."
+  [ -n "$FRONT_TAG" ] || die "dist/web-* 가 없습니다. TARGET=front ./deploy/build.sh 로 먼저 빌드하세요."
+  [ -d "dist/web-$FRONT_TAG" ] || die "dist/web-$FRONT_TAG 가 없습니다."
+
+  # 로컬에 없으면 미리 받는다. compose up 중 실패하면 권한 문제인지 알기 어렵다
+  local image="$BACKEND_IMAGE:$BACKEND_TAG" out
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    echo "⬇️  $image 가 로컬에 없어 pull 합니다."
+    if ! out=$(docker pull "$image" 2>&1); then
+      if echo "$out" | grep -qiE 'denied|unauthorized|authentication required|no basic auth'; then
+        die "$image pull 권한이 없습니다. 'docker login' 후 다시 실행하세요 (ECR이면 aws ecr get-login-password)."
+      fi
+      die "$image pull 실패:
+$out"
+    fi
+  fi
 
   # 다른 프로세스가 포트를 쓰고 있는지 (frontend 컨테이너 자신은 제외)
   local port=${FRONT_PORT:-8080}
