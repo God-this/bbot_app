@@ -22,7 +22,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ENV_FILE=backend/.env.staging
-BACKEND_REPO=eunsaem338/bebot-backend
+# compose의 기본값과 같아야 한다. 태그를 찾는 저장소와 compose가 띄우는 저장소가 어긋나지 않도록 export한다
+BACKEND_IMAGE=${BACKEND_IMAGE:-eunsaem338/bebot-backend}
+export BACKEND_IMAGE
 
 die() { echo "❌ $*" >&2; exit 1; }
 
@@ -33,11 +35,11 @@ HEAD_SHA=$(git rev-parse --short HEAD)
 # 셸에 예전에 export한 값이 남아 있으면 HEAD와 다른 버전이 뜰 수 있어 출처를 기록한다
 BACKEND_SRC=환경변수
 if [ -z "${BACKEND_TAG:-}" ]; then
-  if docker image inspect "$BACKEND_REPO:$HEAD_SHA" >/dev/null 2>&1; then
+  if docker image inspect "$BACKEND_IMAGE:$HEAD_SHA" >/dev/null 2>&1; then
     BACKEND_TAG=$HEAD_SHA BACKEND_SRC=HEAD
   else
     # docker images의 기본 정렬은 이미지 저장소 설정에 따라 달라 생성 시각으로 직접 정렬한다
-    BACKEND_TAG=$(docker images "$BACKEND_REPO" --format '{{.CreatedAt}}\t{{.Tag}}' 2>/dev/null \
+    BACKEND_TAG=$(docker images "$BACKEND_IMAGE" --format '{{.CreatedAt}}\t{{.Tag}}' 2>/dev/null \
       | grep -v '<none>' | sort -r | head -1 | cut -f2 || true)
     BACKEND_SRC="최근 이미지, HEAD 아님"
   fi
@@ -85,6 +87,7 @@ preflight() {
 
 show_tags() {
   echo "HEAD=$HEAD_SHA"
+  echo "BACKEND_IMAGE=$BACKEND_IMAGE"
   echo "BACKEND_TAG=$BACKEND_TAG ($BACKEND_SRC)"
   echo "FRONT_TAG=$FRONT_TAG ($FRONT_SRC)"
   echo "FRONT_PORT=${FRONT_PORT:-8080}"
