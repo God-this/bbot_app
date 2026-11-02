@@ -6,11 +6,14 @@ set -euo pipefail
 # 사용법:
 #   ./deploy/db-restore.sh <덤프 파일>           # 빈 DB에 복원
 #   ./deploy/db-restore.sh <덤프 파일> --force   # 기존 데이터를 지우고 복원 (backend 정지)
+#   ./deploy/db-restore.sh <덤프 파일> --force --delete-dump   # 복원에 성공하면 덤프 파일 삭제
 #   ./deploy/db-restore.sh --check              # 복원 없이 현재 DB 상태만 출력
 #
 # 덤프는 custom 형식(pg_dump -Fc)만 받는다. 운영(EC2)에서 만드는 방법:
 #   pg_dump -Fc -h <호스트> -p <포트> -U <사용자> -d <DB> -f bebot_staging.dump
 #   EC2 키는 Mac에만 있으므로 EC2 → Mac → 스테이징 서버 순서로 옮긴다 (scp).
+#   덤프에는 운영 개인정보(사용자, 대화 기록)가 들어 있다. Mac 사본은 scp 직후 지우고,
+#   스테이징 서버 사본은 마지막 복원에 --delete-dump 를 붙여 지운다.
 #
 # 다른 compose 프로젝트로 복원해 보려면 (기존 스테이징 DB에 영향 없음):
 #   COMPOSE_PROJECT_NAME=bebot-test ./deploy/db-restore.sh <덤프 파일>
@@ -57,15 +60,18 @@ start_postgres() {
   dc up -d --wait postgres >/dev/null
 }
 
-DUMP="" FORCE=0 CHECK=0
+DUMP="" FORCE=0 CHECK=0 DELETE_DUMP=0
 for arg in "$@"; do
   case "$arg" in
     --force) FORCE=1 ;;
     --check) CHECK=1 ;;
+    --delete-dump) DELETE_DUMP=1 ;;
     -*) die "알 수 없는 옵션: $arg" ;;
     *) [ -z "$DUMP" ] || die "덤프 파일은 하나만 지정하세요."; DUMP=$arg ;;
   esac
 done
+
+[ "$CHECK" = 0 ] || [ "$DELETE_DUMP" = 0 ] || die "--check 와 --delete-dump 는 함께 쓸 수 없습니다."
 
 if [ "$CHECK" = 1 ]; then
   start_postgres
@@ -114,7 +120,12 @@ report
 
 if [ "$rc" -ne 0 ]; then
   echo "⚠️  pg_restore가 오류와 함께 끝났습니다 (종료 코드 $rc). $LOG 를 확인하세요." >&2
+  [ "$DELETE_DUMP" = 0 ] || echo "   다시 시도할 수 있도록 $DUMP 는 지우지 않았습니다." >&2
   exit "$rc"
 fi
 echo "✅ 복원 완료"
+if [ "$DELETE_DUMP" = 1 ]; then
+  rm -f -- "$DUMP"
+  echo "🗑️  $DUMP 삭제"
+fi
 [ "${#CLEAN[@]}" -eq 0 ] || echo "   ./deploy/staging.sh up 으로 backend를 다시 띄우세요. 이전 데이터 기준 캐시가 남아 있으면 redis를 비우세요."
