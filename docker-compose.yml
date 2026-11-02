@@ -38,9 +38,12 @@ services:
     # 외부 포트는 열지 않는다. 접속은 docker compose exec postgres psql ... 로 한다
 
   redis:
-    image: redis:7.4
+    image: redis:8.0.5   # 운영과 동일. 상위 버전이 만든 RDB는 하위 버전에서 읽지 못한다
     restart: unless-stopped
-    # 캐시·요청 제한 용도라 volume 없이 둔다. down → up 하면 비어 있는 상태로 시작한다
+    # 답변 캐시(90일 TTL)를 재시작 후에도 유지한다.
+    # 공식 이미지 기본값이 운영과 같다: RDB 저장(save 3600 1 300 100 60 10000), AOF 끔, 저장 위치 /data
+    volumes:
+      - redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -92,3 +95,4 @@ services:
 
 volumes:
   pgdata:
+  redisdata:
