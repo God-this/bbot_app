@@ -33,7 +33,10 @@ logger = get_logger(__name__)
 # 설정값 (환경변수)
 # ──────────────────────────────────────────────────────────
 
-SECRET_KEY  = os.getenv("JWT_SECRET_KEY", "CHANGE-THIS-SECRET-IN-PRODUCTION")
+# 기본값으로 서명하면 누구나 토큰을 위조할 수 있으므로, 없거나 비어 있으면 기동하지 않는다
+SECRET_KEY  = os.getenv("JWT_SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("JWT_SECRET_KEY 환경변수가 없거나 비어 있습니다. backend/.env에 설정하세요.")
 ALGORITHM   = "HS256"
 # 토큰 유효기간: 7일 (모바일 앱은 길게 설정하는 것이 UX상 유리)
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7
