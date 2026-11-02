@@ -4,7 +4,8 @@ set -euo pipefail
 # 사용법:
 #   ./deploy/build.sh                       # backend 이미지 + frontend 결과물
 #   TARGET=front ./deploy/build.sh          # frontend만 (backend 재빌드 생략)
-#   PUSH=1 DOCKERHUB_USER=... ./deploy/build.sh   # backend 이미지 push
+#   PUSH=1 ./deploy/build.sh                # backend 이미지 push
+#   BACKEND_IMAGE=<저장소> ./deploy/build.sh  # 저장소 변경 (기본 eunsaem338/bebot-backend. ECR 등)
 #   NAVER_REDIRECT_URI=... KAKAO_REDIRECT_URI=... TARGET=front ./deploy/build.sh
 #
 # frontend는 이미지가 아니라 dist/web-<sha>/ 정적 파일로 만든다.
@@ -26,15 +27,19 @@ esac
 TAG=$(git rev-parse --short HEAD)
 
 if [ "$TARGET" != "front" ]; then
-  IMAGE=bebot-backend:$TAG
+  # 예전 방식(DOCKERHUB_USER)으로 실행하면 의도와 다른 저장소에 push될 수 있어 막는다
+  if [ -n "${DOCKERHUB_USER:-}" ]; then
+    echo "❌ DOCKERHUB_USER 대신 BACKEND_IMAGE=$DOCKERHUB_USER/bebot-backend 로 지정하세요." >&2
+    exit 1
+  fi
+  # staging.sh, docker-compose.yml과 같은 이름으로 만들어야 push 없이도 스테이징에서 바로 쓸 수 있다
+  IMAGE=${BACKEND_IMAGE:-eunsaem338/bebot-backend}:$TAG
   docker build -f backend/Dockerfile -t "$IMAGE" .
   echo "✅ built $IMAGE"
 
   if [ "${PUSH:-0}" = "1" ]; then
-    : "${DOCKERHUB_USER:?DOCKERHUB_USER 환경변수가 필요합니다}"
-    docker tag "$IMAGE" "$DOCKERHUB_USER/$IMAGE"
-    docker push "$DOCKERHUB_USER/$IMAGE"
-    echo "✅ pushed $DOCKERHUB_USER/$IMAGE"
+    docker push "$IMAGE"
+    echo "✅ pushed $IMAGE"
   fi
 fi
 

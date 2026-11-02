@@ -13,7 +13,11 @@ set -euo pipefail
 #   ./deploy/staging.sh psql [psql 옵션]      # 예: psql -c "SELECT count(*) FROM users;"
 #   ./deploy/staging.sh redis [redis-cli 명령] # 예: redis --scan --pattern 'bebot:cache:*'
 #   ./deploy/staging.sh tags                 # 사용할 태그만 출력
+#   ./deploy/staging.sh prune-dist [개수] [-y] # 오래된 dist/web-* 정리 (사용 중·HEAD·최근 N개(기본 3)는 남김)
 #   ./deploy/staging.sh compose <인자...>     # 그 밖의 docker compose 명령
+#
+# dist/web-* 는 직접 지우지 말고 prune-dist로 정리한다.
+# frontend가 마운트한 폴더를 지우면(같은 sha로 다시 빌드해도) 화면이 403이 된다.
 #
 # 태그 결정 (환경변수로 지정하면 그 값을 우선. tags 출력에 출처를 표시):
 #   BACKEND_TAG: <HEAD SHA> 이미지가 있으면 그것, 없으면 가장 최근에 만든 bebot-backend 이미지
@@ -115,6 +119,74 @@ $out"
   fi
 }
 
+FRONT_ROOT=/usr/share/nginx/html
+
+frontend_id() { dc ps -a -q frontend 2>/dev/null || true; }
+
+# frontend가 마운트한 호스트 폴더 이름 (예: web-af28806). 컨테이너가 없으면 빈 값
+mounted_dist() {
+  local id src
+  id=$(frontend_id)
+  [ -n "$id" ] || return 0
+  src=$(docker inspect --format "{{range .Mounts}}{{if eq .Destination \"$FRONT_ROOT\"}}{{.Source}}{{end}}{{end}}" "$id" 2>/dev/null || true)
+  echo "${src##*/}"
+}
+
+# 마운트한 폴더를 호스트에서 지우면 컨테이너는 지워진 빈 폴더를 계속 본다.
+# 같은 이름으로 다시 만들어도 마찬가지라, 호스트 폴더가 아니라 컨테이너 안에서 확인한다.
+frontend_dist_ok() {
+  local id
+  id=$(dc ps -q --status running frontend 2>/dev/null || true)
+  [ -n "$id" ] || return 0
+  docker exec "$id" test -f "$FRONT_ROOT/index.html" 2>/dev/null && return 0
+  echo "⚠️  frontend가 마운트한 $(mounted_dist) 를 컨테이너에서 읽을 수 없습니다 (지워졌거나 다시 빌드됨 → 화면 403)." >&2
+  return 1
+}
+
+# 태그가 같으면 compose는 frontend를 다시 만들지 않으므로 직접 다시 만든다
+ensure_frontend() {
+  if ! frontend_dist_ok; then
+    echo "🔁 frontend를 다시 만듭니다."
+    dc up -d --force-recreate --no-deps frontend
+  fi
+}
+
+prune_dist() {
+  local keep_n=3 yes=0 arg
+  for arg in "$@"; do
+    case "$arg" in
+      -y) yes=1 ;;
+      ''|*[!0-9]*) die "사용법: prune-dist [보존 개수] [-y]" ;;
+      *) keep_n=$arg ;;
+    esac
+  done
+
+  local mounted d name i=0 del=()
+  mounted=$(mounted_dist)
+  # 최근 빌드 순. 사용 중인 폴더, HEAD 폴더, 최근 N개는 남긴다
+  while IFS= read -r d; do
+    d=${d%/} name=${d##*/} i=$((i + 1))
+    if [ "$i" -le "$keep_n" ] || [ "$name" = "$mounted" ] || [ "$name" = "web-$HEAD_SHA" ]; then
+      continue
+    fi
+    del+=("$d")
+  done < <(ls -td dist/web-*/ 2>/dev/null || true)
+
+  echo "남김: 최근 ${keep_n}개, 사용 중 ${mounted:-없음}, HEAD web-$HEAD_SHA"
+  if [ ${#del[@]} -eq 0 ]; then
+    echo "지울 dist가 없습니다."
+    return 0
+  fi
+  printf '  삭제: %s\n' "${del[@]}"
+  if [ "$yes" -ne 1 ]; then
+    local ans
+    read -r -p "삭제할까요? [y/N] " ans || true
+    [ "$ans" = y ] || { echo "취소했습니다."; return 0; }
+  fi
+  rm -rf -- "${del[@]}"
+  echo "✅ ${#del[@]}개 삭제"
+}
+
 show_tags() {
   echo "HEAD=$HEAD_SHA"
   echo "BACKEND_IMAGE=$BACKEND_IMAGE"
@@ -137,6 +209,7 @@ case "$cmd" in
     preflight
     show_tags
     dc up -d "$@"
+    ensure_frontend
     dc ps
     ;;
   down)
@@ -145,7 +218,10 @@ case "$cmd" in
     done
     dc down "$@"
     ;;
-  ps)               dc ps "$@" ;;
+  ps)
+    dc ps "$@"
+    frontend_dist_ok || echo "   ./deploy/staging.sh up 으로 다시 만드세요." >&2
+    ;;
   logs)             dc logs "$@" ;;
   recreate-backend)
     preflight
@@ -153,6 +229,7 @@ case "$cmd" in
     dc up -d --force-recreate backend
     # nginx는 시작할 때 backend 주소를 한 번만 찾으므로 함께 재시작한다
     dc restart frontend
+    ensure_frontend
     dc ps
     ;;
   psql)
@@ -160,9 +237,11 @@ case "$cmd" in
     ;;
   redis)            dc exec ${TTY[@]+"${TTY[@]}"} redis redis-cli "$@" ;;
   tags)             show_tags ;;
+  prune-dist)       prune_dist "$@" ;;
   compose)          dc "$@" ;;
   *)
-    sed -n '4,20p' "$0" | sed 's/^# \{0,1\}//'
+    # 파일 맨 위 설명 주석(첫 빈 줄 전까지)을 출력한다
+    sed -n '4,/^$/p' "$0" | sed 's/^# \{0,1\}//'
     [ -z "$cmd" ] || exit 1
     ;;
 esac
