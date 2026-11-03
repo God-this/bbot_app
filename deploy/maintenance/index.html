@@ -69,10 +69,8 @@ main {
   align-items: center;
   text-align: center;
 }
-.brand { display: flex; align-items: center; gap: 10px; }
-.brand svg { width: 36px; height: 36px; flex: none; }
-.brand-name { font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
-.tagline { margin: 6px 0 0; font-size: 14px; color: var(--text-2); }
+.logo { display: block; width: 64px; height: 64px; }
+.tagline { margin: 12px 0 0; font-size: 14px; color: var(--text-2); }
 .art { width: 100%; max-width: 260px; margin: 32px 0 8px; }
 .art svg { display: block; width: 100%; height: auto; }
 h1 { margin: 8px 0 12px; font-size: clamp(20px, 5.4vw, 26px); line-height: 1.4; font-weight: 700; letter-spacing: -0.02em; }
@@ -125,15 +123,8 @@ footer { padding: 16px; text-align: center; font-size: 12px; color: var(--text-2
 </head>
 <body>
 <main>
-  <div class="brand">
-    <svg viewBox="0 0 40 40" aria-hidden="true">
-      <rect width="40" height="40" rx="11" fill="var(--primary)"/>
-      <path d="M20 30V18" stroke="#FFFFFF" stroke-width="2.6" stroke-linecap="round"/>
-      <path d="M20 22c-4.6 0-7.6-2.8-8-7.4 4.6 0 7.6 2.8 8 7.4Z" fill="#FFFFFF"/>
-      <path d="M20 19c.4-5 3.6-8 8.6-8-.4 5-3.6 8-8.6 8Z" fill="#FFFFFF" opacity="0.85"/>
-    </svg>
-    <span class="brand-name">BeBot</span>
-  </div>
+  <!-- front/assets/images/bebot_logo.png를 192px·32색으로 줄여 인라인 (2x 이상 선명도) -->
+  <img class="logo" width="64" height="64" alt="BeBot" src="data:image/png;base64,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">
   <p class="tagline">창조과학 인공지능 챗봇</p>
 
   <div class="art">
