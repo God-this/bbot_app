@@ -8,3 +8,6 @@ backend/requirements_mac.txt
 backend/bible.txt
 backend/*eval_data.xlsx
 backend/bible_test_logs/
+
+# 테스트 결과 파일 (성경 본문 포함)
+backend/test_reports/
