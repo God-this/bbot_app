@@ -15,6 +15,8 @@
   - 진짜: 구절 검출 → 원문 대조 → 삭제·교체 → 전송 (bbot_graph, bible_verify)
   - 케이스: verse_test_cases.py (조합 생성, 정답은 성경 데이터와 규칙에서)
   - 점수: conftest.py가 항목별로 모아 마지막에 표시
+  - 결과 파일: backend/test_reports/verse_<날짜_시각>.md (읽기용), .csv (엑셀용)
+    케이스별 질문·가짜 LLM 답변·실제 출력·바뀐 부분·확인한 항목과 통과 여부가 남는다
 
 케이스 하나는 일반 응답 1번 + 스트리밍 3번(토큰을 자르는 위치를 바꿔 가며)으로 돌리고,
 네 결과가 모두 같고 정답지와 맞아야 통과한다.
@@ -255,68 +257,77 @@ PARAMS = [
 ]
 
 
-def _fail(case, msg: str, out: str | None = None):
-    detail = f"\n  입력: {case.answer!r}" + (f"\n  출력: {out!r}" if out is not None else "")
-    pytest.fail(f"[{case.id}] {case.note} — {msg}{detail}", pytrace=False)
-
-
 @pytest.mark.parametrize("case", PARAMS)
-def test_case(pipeline, monkeypatch, case):
+def test_case(pipeline, monkeypatch, request, case):
+    """케이스 하나 실행. 확인 항목을 모두 기록한 뒤(결과 파일용), 하나라도 틀리면 실패."""
+    rec = {"question": QUESTION, "input": case.answer, "output": None, "statuses": None, "checks": []}
+    request.node.verse_record = rec          # conftest.py가 결과 파일에 쓴다
+
+    def check(label: str, ok: bool, detail: str = ""):
+        rec["checks"].append((label, bool(ok), detail))
+
     monkeypatch.setattr(bv, "VERSE_CONTEXT_ACTION", case.context_action)
     if case.path == "cache":
         pipeline.cached = {"answer": case.answer, "sources": {}}
+        rec["question"] += " (캐시에 이 질문의 답변이 저장돼 있음)"
     elif case.path == "blocked":
         pipeline.safe = (False, case.block_reason)
+        rec["question"] += f" (가드레일이 차단: {case.block_reason})"
     elif case.path == "fallback":
         pipeline.graph = {"fallback_message": case.answer}
+        rec["question"] += " (검색 자료 부족 → fallback)"
     llm_answer = case.answer if case.path == "llm" else "쓰이면 안 되는 답변"
 
     runs = [("일반 응답", run_generate, 0)] + [(f"스트리밍(seed {s})", run_stream, s) for s in STREAM_SEEDS]
-    outputs, statuses = [], None
+    outputs, llm_calls, judge_calls, shadows = [], [], [], []
     for name, run, seed in runs:
         LANGFUSE.updates.clear()
         judge = MockJudge(case.judge) if case.judge else None
         llm = pipeline.configure(llm_answer, seed=seed, judge_mode=case.judge_mode, judge=judge)
-        out = run()
-        outputs.append(out)
-
-        expected_calls = 1 if case.path == "llm" else 0
-        if len(llm.calls) != expected_calls:
-            _fail(case, f"{name}: 답변 LLM 호출 {len(llm.calls)}번 (기대 {expected_calls}번)", out)
-        if case.judge_called is not None and judge is not None and (judge.calls > 0) != case.judge_called:
-            _fail(case, f"{name}: 판정 LLM 호출 {judge.calls}번 (기대: {'호출' if case.judge_called else '호출 안 함'})", out)
-        if case.shadow_status is not None:
-            shadow = LANGFUSE.shadow_result() or {}
-            if shadow.get("status") != case.shadow_status:
-                _fail(case, f"{name}: shadow 기록 status={shadow.get('status')} (기대 {case.shadow_status})", out)
-            for k, v in case.shadow_counts.items():
-                if shadow.get("counts", {}).get(k) != v:
-                    _fail(case, f"{name}: shadow 판정 {k} {shadow.get('counts', {}).get(k)}개 (기대 {v}개)", out)
-        if name == "일반 응답" and case.statuses is not None:
+        outputs.append(run())
+        llm_calls.append(len(llm.calls))
+        judge_calls.append(judge.calls if judge else 0)
+        shadows.append(LANGFUSE.shadow_result() or {})
+        if name == "일반 응답":
             md = LANGFUSE.metadata_for("rag") or {}
-            statuses = [x["status"] for x in md.get("verse_check", {}).get("code", [])]
+            rec["statuses"] = [x["status"] for x in md.get("verse_check", {}).get("code", [])]
 
     whole = outputs[0]
-    for (name, _, _), out in zip(runs[1:], outputs[1:]):
-        if out != whole:
-            _fail(case, f"{name} 결과가 일반 응답과 다름\n  일반: {whole!r}", out)
+    rec["output"] = whole
+    diff = next(((n, o) for (n, _, _), o in zip(runs[1:], outputs[1:]) if o != whole), None)
+    check("일반 응답과 스트리밍 3번의 결과가 같음", diff is None, f"{diff[0]}: {diff[1]!r}" if diff else "")
+
+    expected_calls = 1 if case.path == "llm" else 0
+    check(f"답변 LLM 호출 {expected_calls}번", all(c == expected_calls for c in llm_calls), f"실제 {llm_calls}")
+    if case.judge_called is not None and case.judge:
+        want = "불림" if case.judge_called else "안 불림"
+        check(f"판정 LLM {want}", all((c > 0) == case.judge_called for c in judge_calls), f"호출 수 {judge_calls}")
+    if case.shadow_status is not None:
+        got = [sh.get("status") for sh in shadows]
+        check(f"shadow 기록 status = {case.shadow_status}", all(g == case.shadow_status for g in got), f"실제 {got}")
+        for k, v in case.shadow_counts.items():
+            got = [sh.get("counts", {}).get(k) for sh in shadows]
+            check(f"shadow 판정 {k} {v}개", all(g == v for g in got), f"실제 {got}")
 
     expected_exact = case.exact
     if case.path == "blocked":
         expected_exact = bg.get_block_message(case.block_reason)
-    if expected_exact is not None and whole != expected_exact:
-        _fail(case, f"출력이 기대와 다름\n  기대: {expected_exact!r}", whole)
+    if expected_exact is not None:
+        label = "출력이 입력과 똑같음 (바뀐 것 없음)" if expected_exact == case.answer else "출력 전체가 기대와 같음"
+        check(label, whole == expected_exact, f"기대: {expected_exact!r}")
     for s in case.must:
-        if s not in whole:
-            _fail(case, f"있어야 할 글자가 없음: {s!r}", whole)
+        check(f"있어야 함: {s!r}", s in whole)
     for s in case.must_not:
-        if s in whole:
-            _fail(case, f"없어야 할 글자가 남아 있음: {s!r}", whole)
+        check(f"없어야 함: {s!r}", s not in whole)
     for s, n in case.counts.items():
-        if whole.count(s) != n:
-            _fail(case, f"{s!r}가 {whole.count(s)}번 나옴 (기대 {n}번)", whole)
-    if case.statuses is not None and statuses != case.statuses:
-        _fail(case, f"구절별 처리 결과 {statuses} (기대 {case.statuses})", whole)
+        check(f"{s!r}가 {n}번", whole.count(s) == n, f"실제 {whole.count(s)}번")
+    if case.statuses is not None:
+        check(f"구절별 처리 결과 = {case.statuses}", rec["statuses"] == case.statuses, f"실제 {rec['statuses']}")
+
+    failed = [(label, detail) for label, ok, detail in rec["checks"] if not ok]
+    if failed:
+        msg = "; ".join(f"{label}" + (f" ({detail})" if detail else "") for label, detail in failed)
+        pytest.fail(f"[{case.id}] {case.note} — {msg}\n  입력: {case.answer!r}\n  출력: {whole!r}", pytrace=False)
 
 
 if __name__ == "__main__":
