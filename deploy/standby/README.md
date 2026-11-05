@@ -89,7 +89,7 @@ deploy/standby/standby.sh sync-cert   # 운영 Let's Encrypt 인증서를 대기
 3. **[콘솔] IP를 대기 서버로 옮기기:** EC2 → 탄력적 IP → `54.163.78.107` 선택 → **작업 → 탄력적 IP 주소 연결**
    - 리소스 유형: 인스턴스 → `bebot-standby`
    - **"이 탄력적 IP 주소의 재연결 허용" 체크** → 연결
-4. **전환 확인:** `[Mac] curl -sI https://bebot.co.kr | head -1` → `HTTP/2 503`
+4. **전환 확인:** `[Mac] curl -sI https://bebot.co.kr | head -1` → `HTTP/1.1 503` (숫자 503만 보면 됨)
 5. **[콘솔] 운영 인스턴스 정지 → 작업 → 시작**
 6. **운영 확인:** IP가 없는 동안 운영 인스턴스는 새 공인 IP를 받을 수 있습니다(콘솔 인스턴스 상세에서 확인).
    ```
