@@ -128,4 +128,4 @@ if [ "$DELETE_DUMP" = 1 ]; then
   rm -f -- "$DUMP"
   echo "🗑️  $DUMP 삭제"
 fi
-[ "${#CLEAN[@]}" -eq 0 ] || echo "   ./deploy/staging.sh up 으로 backend를 다시 띄우세요. 이전 데이터 기준 캐시가 남아 있으면 redis를 비우세요."
+[ "${#CLEAN[@]}" -eq 0 ] || echo "   ./deploy/staging.sh up 으로 backend를 다시 띄우세요. redis도 같은 시점의 운영 RDB로 복원하세요 (./deploy/redis-restore.sh <dump.rdb> --force)."
