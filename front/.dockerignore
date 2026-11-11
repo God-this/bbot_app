@@ -1,0 +1,14 @@
+.env
+build/
+.dart_tool/
+.flutter-plugins-dependencies
+.idea/
+*.iml
+android/
+ios/
+linux/
+macos/
+windows/
+test/
+__pycache__/
+**/.DS_Store

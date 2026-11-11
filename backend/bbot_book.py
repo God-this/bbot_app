@@ -4,7 +4,7 @@ from llm_factory import get_embedding, embed_query
 
 embedding_model = get_embedding()
 
-BASE_URL = "https://api.bebot.co.kr"
+BASE_URL = os.getenv("IMAGE_BASE_URL", "https://api.bebot.co.kr")
 
 def _to_image_url(file_path: str) -> str:
     return f"{BASE_URL}/images/{os.path.basename(file_path)}"

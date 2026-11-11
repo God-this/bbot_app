@@ -1,4 +1,5 @@
 import json
+import os
 
 import redis
 from sklearn.metrics.pairwise import cosine_similarity
@@ -10,9 +11,9 @@ logger = get_logger(__name__)
 embedding_model = _get_embedding_model()
 
 r = redis.Redis(
-    host="localhost",
-    port=6379,
-    db=0,
+    host=os.getenv("REDIS_HOST", "localhost"),
+    port=int(os.getenv("REDIS_PORT", "6379")),
+    db=int(os.getenv("REDIS_DB", "0")),
     decode_responses=True
 )
 
