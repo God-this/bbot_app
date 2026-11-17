@@ -36,9 +36,6 @@ bible_verify.py — 생성된 답변 속 성경 구절을 개역한글 원문과
 나중에 할 일
   - 없는 구절 대신 올바른 구절 찾아 넣기
   - 맥락 판정 결과를 답변에 반영할지 결정 (지금은 shadow로 기록만)
-
-단독 실행:
-    python bible_verify.py '"태초에 하나님이 천지를 창조하시니라" (창세기 1:1, 개역한글)'
 """
 import os
 import re
@@ -822,12 +819,3 @@ def reverify_cached(answer: str) -> str:
         logger.info("[VerseCheck] 캐시 답변 재검증으로 변경됨: %s",
                     ", ".join(f"{r['ref']}={r['status']}" for r in report))
     return out
-
-
-if __name__ == "__main__":
-    import sys
-    text = " ".join(sys.argv[1:]) or '"태초에 하나님이 천지를 창조하시니라" (창세기 1:1, 개역한글)'
-    result, report = verify_answer(text)
-    print(result)
-    for r in report:
-        print(r)

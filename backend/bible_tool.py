@@ -7,16 +7,10 @@ bible_tool.py — 개역한글 성경 구절 조회 Tool (OpenAI 호환 function
 - stream_with_tools: 스트리밍 답변용 tool-calling 루프 (generate_stream)
 
 사전 준비: load_bible.py 로 bible_krv 테이블을 만들어 두어야 함
-단독 테스트:
-    python bible_tool.py 요 3 16
-    python bible_tool.py 시편 23
-    python bible_tool.py --search 태초
-    python bible_tool.py --llm "창세기 1장 1절 말씀 알려줘"
 """
 import json
 import os
 import re
-import sys
 from typing import Iterator
 
 from config import get_conn
@@ -334,32 +328,3 @@ def stream_with_tools(client, model: str, messages: list[dict], **kwargs) -> Ite
     for chunk in stream:
         if chunk.choices and chunk.choices[0].delta.content:
             yield chunk.choices[0].delta.content
-
-
-# ==================== 단독 테스트 ====================
-
-if __name__ == "__main__":
-    args = sys.argv[1:]
-    if not args:
-        print(__doc__)
-        sys.exit(0)
-
-    if args[0] == "--search":
-        print(json.dumps(search_bible(" ".join(args[1:])), ensure_ascii=False, indent=2))
-    elif args[0] == "--llm":
-        from config import LLM_MODEL
-        from llm_factory import get_client
-
-        q = " ".join(args[1:]) or "창세기 1장 1절 말씀 알려줘"
-        msgs = [
-            {"role": "system", "content": "당신은 성경 도우미입니다." + BIBLE_TOOL_PROMPT},
-            {"role": "user", "content": q},
-        ]
-        for tok in stream_with_tools(get_client(), LLM_MODEL, msgs, temperature=0):
-            print(tok, end="", flush=True)
-        print()
-    else:
-        book, chapter, *verses = args
-        vs = verses[0] if len(verses) > 0 else None
-        ve = verses[1] if len(verses) > 1 else None
-        print(json.dumps(get_bible_verses(book, chapter, vs, ve), ensure_ascii=False, indent=2))

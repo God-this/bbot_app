@@ -1,10 +1,7 @@
 """맥락·주소 판정 테스트 — 실제 LLM 대신 가짜 클라이언트로 흐름을 검증한다.
 
-    python test_bible_verse_judge.py
+    python -m pytest tests
 """
-import os
-os.environ.setdefault("BIBLE_SOURCE", "file")   # DB 없이 bible.txt로 테스트
-
 import json
 import random
 from types import SimpleNamespace as NS
@@ -208,15 +205,3 @@ def test_run_shadow():
     assert "(창세기 1:10, 개역한글)" in r["would_be_answer"]
     assert run_shadow("구절 없는 답변", make_judge(c, "fake"))["status"] == "no_citations"
     assert run_shadow(SAMPLE, make_judge(FakeJudgeClient([], fail=True), "fake"))["status"] == "error"
-
-
-if __name__ == "__main__":
-    import sys
-    fails = 0
-    for name, fn in list(globals().items()):
-        if name.startswith("test_"):
-            try:
-                fn(); print("PASS", name)
-            except AssertionError as e:
-                fails += 1; print("FAIL", name, e)
-    sys.exit(1 if fails else 0)

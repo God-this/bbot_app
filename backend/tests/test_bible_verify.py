@@ -1,8 +1,6 @@
-"""bible_verify 단위 테스트 — python -m pytest test_bible_verify.py (또는 python test_bible_verify.py)"""
-import os
-os.environ.setdefault("BIBLE_SOURCE", "file")   # DB 없이 bible.txt로 테스트 (BIBLE_SOURCE=db로 DB 테스트)
-
+"""bible_verify 단위 테스트 (LLM 호출 없음) — python -m pytest tests"""
 import random
+
 from bible_verify import VerseStreamFilter, verify_answer, reverify_cached, APPENDIX_HEADER
 
 GEN11 = "태초에 하나님이 천지를 창조하시니라"
@@ -122,12 +120,3 @@ def test_korean_range_with_eseo():
 def test_unclosed_quote_flushes():
     t = '그는 "끝나지 않은 인용'
     assert check(t) == t
-
-if __name__ == "__main__":
-    import sys
-    fails = 0
-    for name, fn in list(globals().items()):
-        if name.startswith("test_"):
-            try: fn(); print("PASS", name)
-            except AssertionError as e: fails += 1; print("FAIL", name, e)
-    sys.exit(1 if fails else 0)
