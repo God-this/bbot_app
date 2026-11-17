@@ -1,0 +1,24 @@
+# Flutter 웹 빌드 전용. 이미지를 만들지 않고 build/web 결과물만 로컬로 꺼낸다.
+#   docker build -f front/Dockerfile.build --output type=local,dest=dist/web-<sha> front
+# 같은 결과물을 스테이징(nginx 마운트)과 운영(S3)에 그대로 배포한다.
+
+FROM ghcr.io/cirruslabs/flutter:3.35.7 AS build
+WORKDIR /app
+
+# 의존성 레이어 캐시: pubspec이 바뀔 때만 pub get 재실행
+COPY pubspec.yaml pubspec.lock ./
+RUN flutter pub get
+
+COPY . .
+
+# BACKEND_URL을 비우면 '/api/...' 상대 경로가 되어 페이지와 같은 출처로 요청한다.
+ARG BACKEND_URL=""
+ARG NAVER_REDIRECT_URI=""
+ARG KAKAO_REDIRECT_URI=""
+RUN flutter build web --release \
+      --dart-define=BACKEND_URL=${BACKEND_URL} \
+      ${NAVER_REDIRECT_URI:+--dart-define=NAVER_REDIRECT_URI=${NAVER_REDIRECT_URI}} \
+      ${KAKAO_REDIRECT_URI:+--dart-define=KAKAO_REDIRECT_URI=${KAKAO_REDIRECT_URI}}
+
+FROM scratch
+COPY --from=build /app/build/web /
