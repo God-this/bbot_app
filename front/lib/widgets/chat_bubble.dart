@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import '../theme.dart';
 import '../models/chat_models.dart';
+import 'bebot_logo.dart';
 
 class ChatBubble extends StatelessWidget {
   final ChatMessage message;
@@ -88,19 +89,9 @@ class _BotBubble extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // 봇 아바타
-          Container(
-            width: 32,
-            height: 32,
-            margin: const EdgeInsets.only(top: 4),
-            decoration: BoxDecoration(
-              color: AppColors.primarySurface,
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: const Icon(
-              Icons.smart_toy_rounded,
-              size: 18,
-              color: AppColors.primaryDark,
-            ),
+          const Padding(
+            padding: EdgeInsets.only(top: 4),
+            child: BebotLogo(size: 32),
           ),
           const SizedBox(width: 10),
 

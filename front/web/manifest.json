@@ -1,11 +1,11 @@
 {
-    "name": "bbot_app1",
-    "short_name": "bbot_app1",
+    "name": "BeBot",
+    "short_name": "BeBot",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#F8F7F4",
+    "theme_color": "#F8F7F4",
+    "description": "창조과학 인공지능 챗봇",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

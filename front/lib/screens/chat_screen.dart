@@ -12,6 +12,7 @@ import '../widgets/chat_bubble.dart';
 import '../widgets/chat_input_bar.dart';
 import '../widgets/sources_sheet.dart';
 import '../widgets/history_drawer.dart';
+import '../widgets/bebot_logo.dart';
 
 const kFeedbackFormUrl = 'https://forms.gle/27ywFtU176sxhYZQ8';
 
@@ -350,24 +351,12 @@ class _ChatScreenState extends State<ChatScreen> {
     return AppBar(
       title: GestureDetector(
         onLongPress: () => _showAdminLogin(context),
-        child: Row(
+        child: const Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              width: 28,
-              height: 28,
-              decoration: BoxDecoration(
-                color: AppColors.primarySurface,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Icon(
-                Icons.smart_toy_rounded,
-                size: 16,
-                color: AppColors.primaryDark,
-              ),
-            ),
-            const SizedBox(width: 8),
-            const Text('BeBot'),
+            BebotLogo(size: 28),
+            SizedBox(width: 8),
+            Text('BeBot'),
           ],
         ),
       ),
