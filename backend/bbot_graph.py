@@ -123,9 +123,7 @@ def _judge_shadow_in_background(raw_answer: str, served_answer: str) -> None:
     ).start()
 
 
-# LangGraph/LangChain 실행을 자동으로 Langfuse에 트레이싱하는 콜백 핸들러.
-# graph.invoke()의 config에 넣어주면 route/retrieve/judge/rewrite 노드가
-# 자동으로 중첩된 span으로 기록됨
+# LangGraph 실행을 Langfuse에 자동 트레이싱한다 (graph.invoke의 callbacks로 전달).
 _langfuse_langchain_handler = CallbackHandler()
 
 # ==================== Cache Toggle ====================
@@ -141,7 +139,7 @@ class GraphState(TypedDict):
     judgement: str
     iteration: int
     chat_history: List[str]
-    # ---- rerank/generate 노드화로 추가된 필드 ----
+    # rerank/generate 노드가 채우는 필드
     qualified_documents: List[dict]   # judge_stage1 통과 문서 (rerank 입력)
     reranked_documents: List[dict]    # rerank 출력 top-k (judge_stage2, generate 입력)
     sources: dict                      # rerank 노드에서 확정되는 web/book/video 분류 결과
@@ -778,11 +776,7 @@ def generate_node(state: GraphState) -> GraphState:
     }
 
 # ==================== 캐시 조회/저장 공용 헬퍼 ====================
-# generate()/generate_stream()에 중복 구현되어 있던
-# exact/semantic 캐시 조회, cache-off 유사도 로깅, 캐시 저장 로직을 통합.
-#
-# 조회 결과 소비 방식(return vs SSE yield)이 두 함수에서 다르므로,
-# 조회 함수는 "히트 여부 + 데이터"만 반환하고 실제 응답 처리는 호출부에 남긴다.
+# 조회는 "히트 종류 + 데이터"만 돌려주고, 응답 처리(return / SSE yield)는 호출부에 남긴다.
 
 def lookup_answer_cache(question: str, normalized_question: str, use_cache: bool) -> tuple[str | None, dict | None]:
     """
@@ -934,9 +928,7 @@ def _lookup_cache_and_tag(resolved_question: str, normalized_question: str, use_
 
 
 def _run_graph(question: str, resolved_question: str, recent_turns: list[dict] | None) -> dict:
-    # LangGraph 실행 — callbacks에 Langfuse 핸들러를 넘겨서
-    # route/retrieve/judge_stage1/rerank/judge_stage2/rewrite/generate/fallback
-    # 노드 전체가 하나의 invoke() 아래에서 자동으로 트레이싱되게 함
+    # callbacks로 노드 전체(route/retrieve/judge/rerank/rewrite/generate)를 하나의 invoke 아래에 트레이싱한다
     graph = create_graph()
     return graph.invoke(
         {
@@ -1015,7 +1007,6 @@ def _generate(question: str, use_cache: bool, source: str, recent_turns: list[di
     book_docs = sources_by_type.get("book_docs", [])
     video_docs = sources_by_type.get("video_docs", [])
 
-    # images 확인 로그
     for doc in book_docs:
         imgs = doc.get("images", [])
         logger.debug("[%s p%s] 이미지 %d개: %s", doc.get('book'), doc.get('page'), len(imgs), imgs)
@@ -1100,7 +1091,7 @@ def _generate_stream(
     cache_hit_type, cached = _lookup_cache_and_tag(resolved_question, normalized_question, use_cache, trace_tags)
     if cached:
         logger.info("Cache Hit (stream, %s) — question: %s", cache_hit_type, resolved_question)
-        # 검증 기능 도입 전에 저장된 캐시 답변도 있으므로 꺼낼 때 다시 검증한다 (code 방식, LLM 호출 없음)
+        # 캐시 답변도 꺼낼 때 code 방식으로 다시 검증한다
         answer = reverify_cached(cached["answer"])
         sources = cached["sources"]
 
@@ -1113,7 +1104,6 @@ def _generate_stream(
         yield "data: [DONE]\n\n"
         yield f"data: [SOURCES]{json.dumps(sources, ensure_ascii=False)}\n\n"
         return
-    # ---------- 캐시 조회 끝 ----------
 
     safe, reason = is_safe_input(question, recent_turns)
     if not safe:
@@ -1204,13 +1194,10 @@ def _generate_stream(
     yield "data: [DONE]\n\n"
     yield f"data: [SOURCES]{json.dumps(sources, ensure_ascii=False)}\n\n"
 
-    # ---------- 캐시 저장 + 평가 큐 적재 ----------
-    # 이 시점엔 이미 [DONE]/[SOURCES]를 내보낸 뒤라 사용자 응답은 완결된 상태다.
-    # 두 작업 모두 fail-open이므로 실패해도 스트림에 영향을 주지 않는다.
+    # ---------- 캐시 저장 + 평가 큐 적재 (사용자 응답은 이미 완결, 둘 다 fail-open) ----------
     cached = persist_answer_cache(use_cache, normalized_question, resolved_question, full_answer, sources)
     enqueue_answer_eval(cached, normalized_question, resolved_question, full_answer, reranked_docs)
 
     # ---------- 맥락·주소 판정 (shadow) ----------
-    # 사용자 응답은 이미 끝났다. 판정 결과는 답변에 반영하지 않고 기록만 한다.
     if VERSE_JUDGE_MODE == "shadow":
         _judge_shadow_in_background(raw_answer, full_answer)
