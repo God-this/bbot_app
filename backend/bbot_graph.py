@@ -99,11 +99,29 @@ _filter_judge = _verse_judge if VERSE_JUDGE_MODE == "apply" else None
 
 
 @observe(name="verse-judge-shadow", capture_input=False)
-def _verse_judge_shadow(raw_answer: str, served_answer: str) -> dict:
+def _verse_judge_shadow(raw_answer: str, served_answer: str) -> dict | None:
     """shadow 모드: 사용자 응답이 끝난 뒤 판정해서 Langfuse·로그에만 남긴다."""
-    result = run_shadow(raw_answer, _verse_judge, served_answer=served_answer)
+    try:
+        result = run_shadow(raw_answer, _verse_judge, served_answer=served_answer)
+    except Exception as e:
+        logger.warning("[VerseJudge:shadow] 실패: %s", e)
+        return None
     get_langfuse_client().update_current_span(input={"raw_answer": raw_answer}, output=result)
     return result
+
+
+def _judge_shadow_in_background(raw_answer: str, served_answer: str) -> None:
+    """응답을 늦추지 않도록 판정을 별도 스레드에서 돌린다.
+
+    스레드는 부모의 contextvars를 물려받지 않으므로 복사본을 넘긴다. 복사본 없이 띄우면
+    verse-judge-shadow span과 그 안의 LLM 호출이 새 트레이스로 찍혀 질문 하나에 Langfuse
+    행이 여러 개 생긴다.
+    """
+    context = contextvars.copy_context()
+    threading.Thread(
+        target=context.run, args=(_verse_judge_shadow, raw_answer, served_answer), daemon=True
+    ).start()
+
 
 # LangGraph/LangChain 실행을 자동으로 Langfuse에 트레이싱하는 콜백 핸들러.
 # graph.invoke()의 config에 넣어주면 route/retrieve/judge/rewrite 노드가
@@ -1043,8 +1061,7 @@ def _generate(question: str, use_cache: bool, source: str, recent_turns: list[di
     enqueue_answer_eval(cached, normalized_question, resolved_question, answer, reranked_docs)
 
     if VERSE_JUDGE_MODE == "shadow":
-        # 응답을 늦추지 않도록 판정은 별도 스레드에서
-        threading.Thread(target=_verse_judge_shadow, args=(raw_answer, answer), daemon=True).start()
+        _judge_shadow_in_background(raw_answer, answer)
 
     return answer, sources, resolved_question
 
@@ -1196,7 +1213,4 @@ def _generate_stream(
     # ---------- 맥락·주소 판정 (shadow) ----------
     # 사용자 응답은 이미 끝났다. 판정 결과는 답변에 반영하지 않고 기록만 한다.
     if VERSE_JUDGE_MODE == "shadow":
-        try:
-            _verse_judge_shadow(raw_answer, full_answer)
-        except Exception as e:
-            logger.warning("[VerseJudge:shadow] 실패: %s", e)
+        _judge_shadow_in_background(raw_answer, full_answer)
