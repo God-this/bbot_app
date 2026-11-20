@@ -122,6 +122,24 @@ class AuthService {
     return (token: token, user: user);
   }
 
+  // ── 로그인 화면 설정 (서버 .env의 GUEST_LOGIN) ───────────────────
+
+  /// 서버에서 게스트 로그인을 허용하는지 조회합니다.
+  /// 조회에 실패하면(구버전 서버·네트워크 오류) 게스트 버튼을 숨기도록 false를 반환합니다.
+  Future<bool> fetchGuestLoginEnabled() async {
+    try {
+      final resp = await http
+          .get(Uri.parse('$baseUrl/api/auth/config'))
+          .timeout(const Duration(seconds: 5));
+      if (resp.statusCode != 200) return false;
+      final data =
+          jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+      return data['guest_login'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   // ── 게스트 로그인 → 백엔드 JWT 발급 ───────────────────────────
 
   /// 로컬에 저장된 device UUID를 반환하거나, 없으면 새로 생성해 저장합니다.
