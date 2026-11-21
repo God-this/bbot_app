@@ -2,7 +2,8 @@
 #
 # 엔드포인트:
 #   POST /api/auth/google          — Google idToken/accessToken 검증 → JWT 발급
-#   POST /api/auth/guest           — device_id 기반 게스트 로그인 → JWT 발급
+#   GET  /api/auth/config          — 로그인 화면 설정 (게스트 로그인 사용 여부)
+#   POST /api/auth/guest           — device_id 기반 게스트 로그인 → JWT 발급 (GUEST_LOGIN=true일 때만)
 #   POST /api/auth/naver           — 모바일: Naver access_token 검증 → JWT 발급
 #   POST /api/auth/naver/web       — 웹: Naver 인가 코드(code) 교환 → JWT 발급
 #   POST /api/auth/kakao           — 모바일: Kakao access_token 검증 → JWT 발급
@@ -45,6 +46,9 @@ NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
 # 웹 카카오 로그인(인가 코드 교환)에만 필요. 모바일 네이티브 SDK는 사용 안 함.
 KAKAO_REST_API_KEY  = os.getenv("KAKAO_REST_API_KEY")
 KAKAO_CLIENT_SECRET = os.getenv("KAKAO_CLIENT_SECRET")
+
+# 게스트(비회원) 로그인 사용 여부. 미설정 시 꺼짐(false). 변경 후 서버 재시작 필요.
+GUEST_LOGIN = (os.getenv("GUEST_LOGIN") or "false").strip().lower() == "true"
 
 router   = APIRouter(prefix="/api/auth", tags=["auth"])
 security = HTTPBearer()
@@ -217,6 +221,16 @@ async def google_login(req: GoogleLoginRequest):
 
 
 # ──────────────────────────────────────────────────────────
+# 인증 엔드포인트 — 로그인 화면 설정
+# ──────────────────────────────────────────────────────────
+
+@router.get("/config")
+async def auth_config():
+    """로그인 화면에서 쓰는 설정. 프론트는 guest_login이 true일 때만 게스트 버튼을 보여줍니다."""
+    return {"guest_login": GUEST_LOGIN}
+
+
+# ──────────────────────────────────────────────────────────
 # 인증 엔드포인트 — 게스트
 # ──────────────────────────────────────────────────────────
 
@@ -225,7 +239,11 @@ async def guest_login(req: GuestLoginRequest):
     """
     비회원(게스트) 로그인. 외부 검증 없이 클라이언트가 보낸 device_id를
     provider_id로 사용해 users 테이블에 upsert하고 JWT를 발급합니다.
+    .env의 GUEST_LOGIN이 true가 아니면 403을 반환합니다.
     """
+    if not GUEST_LOGIN:
+        raise HTTPException(status_code=403, detail="게스트 로그인이 비활성화되어 있습니다.")
+
     if not req.device_id or not req.device_id.strip():
         raise HTTPException(status_code=400, detail="device_id가 필요합니다.")
 
