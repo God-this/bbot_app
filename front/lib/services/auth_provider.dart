@@ -64,6 +64,9 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
+  /// 서버 설정(GUEST_LOGIN)상 게스트 로그인을 허용하는지 조회
+  Future<bool> isGuestLoginEnabled() => _service.fetchGuestLoginEnabled();
+
   /// 로그인 없이 게스트로 계속하기
   Future<void> continueAsGuest() async {
     _error = null;

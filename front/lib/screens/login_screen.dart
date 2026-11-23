@@ -14,6 +14,18 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   bool    _loading = false;
   String? _error;
+  bool    _guestLoginEnabled = false; // 서버 .env의 GUEST_LOGIN 값
+
+  @override
+  void initState() {
+    super.initState();
+    _loadGuestLoginEnabled();
+  }
+
+  Future<void> _loadGuestLoginEnabled() async {
+    final enabled = await context.read<AuthProvider>().isGuestLoginEnabled();
+    if (mounted) setState(() => _guestLoginEnabled = enabled);
+  }
 
   Future<void> _handleGoogleSignIn() async {
     setState(() { _loading = true; _error = null; });
@@ -54,18 +66,18 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  // Future<void> _handleGuestContinue() async {
-  //   setState(() { _loading = true; _error = null; });
-  //   try {
-  //     await context.read<AuthProvider>().continueAsGuest();
-  //   } catch (e) {
-  //     if (mounted) {
-  //       setState(() => _error = e.toString());
-  //     }
-  //   } finally {
-  //     if (mounted) setState(() => _loading = false);
-  //   }
-  // }
+  Future<void> _handleGuestContinue() async {
+    setState(() { _loading = true; _error = null; });
+    try {
+      await context.read<AuthProvider>().continueAsGuest();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _error = e.toString());
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -123,18 +135,21 @@ class _LoginScreenState extends State<LoginScreen> {
                           _NaverSignInButton(onTap: _handleNaverSignIn),
                           const SizedBox(height: 12),
                           _KakaoSignInButton(onTap: _handleKakaoSignIn),
-                          // const SizedBox(height: 12),
-                          // TextButton(
-                          //   onPressed: _handleGuestContinue,
-                          //   child: Text(
-                          //     '로그인 없이 질문하기',
-                          //     style: TextStyle(
-                          //       fontSize: 14,
-                          //       color: AppColors.textSecondary,
-                          //       decoration: TextDecoration.underline,
-                          //     ),
-                          //   ),
-                          // ),
+                          // 게스트 로그인: 서버 .env의 GUEST_LOGIN=true일 때만 표시
+                          if (_guestLoginEnabled) ...[
+                            const SizedBox(height: 12),
+                            TextButton(
+                              onPressed: _handleGuestContinue,
+                              child: const Text(
+                                '로그인 없이 질문하기',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: AppColors.textSecondary,
+                                  decoration: TextDecoration.underline,
+                                ),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
 

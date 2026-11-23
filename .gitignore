@@ -12,3 +12,8 @@ dist/
 backend/bible.txt
 backend/*eval_data.xlsx
 backend/bible_test_logs/
+
+# 점검 모드 플래그 (deploy/maintenance.sh 로컬 리허설)
+deploy/maintenance/ON
+deploy/maintenance/info.json
+deploy/maintenance/.info.*
