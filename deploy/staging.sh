@@ -20,8 +20,13 @@ set -euo pipefail
 # frontend가 마운트한 폴더를 지우면(같은 sha로 다시 빌드해도) 화면이 403이 된다.
 #
 # 태그 결정 (환경변수로 지정하면 그 값을 우선. tags 출력에 출처를 표시):
+#   TAG=<sha>:   BACKEND_TAG, FRONT_TAG를 한 번에 지정 (배포할 때는 이것을 쓴다)
 #   BACKEND_TAG: <HEAD SHA> 이미지가 있으면 그것, 없으면 가장 최근에 만든 bebot-backend 이미지
 #   FRONT_TAG:   dist/web-<HEAD SHA>가 있으면 그것, 없으면 가장 최근 dist/web-*
+#   FRONT_VARIANT=<이름>: redirect 주소를 바꿔 빌드한 프론트(<sha>-<이름>)를 쓸 때
+#
+# 서버에서는 빌드하지 않는다. backend 이미지와 frontend 이미지(정적 파일)가 로컬에 없으면
+# up 할 때 pull 하고, frontend는 dist/web-<태그>/ 로 꺼낸다 (docker login 필요).
 
 cd "$(dirname "$0")/.."
 
@@ -29,12 +34,23 @@ ENV_FILE=backend/.env.staging
 # compose의 기본값과 같아야 한다. 태그를 찾는 저장소와 compose가 띄우는 저장소가 어긋나지 않도록 export한다
 BACKEND_IMAGE=${BACKEND_IMAGE:-eunsaem338/bebot-backend}
 export BACKEND_IMAGE
+# build.sh와 같은 기본값
+FRONT_IMAGE=${FRONT_IMAGE:-eunsaem338/bebot-frontend}
+FRONT_VARIANT=${FRONT_VARIANT:-}
 
 die() { echo "❌ $*" >&2; exit 1; }
 
 [ -f "$ENV_FILE" ] || die "$ENV_FILE 이 없습니다."
 
-HEAD_SHA=$(git rev-parse --short HEAD)
+# build.sh와 같은 길이로 고정한다
+HEAD_SHA=$(git rev-parse --short=7 HEAD)
+
+# TAG 하나로 둘 다 지정 (개별 값이 있으면 그것을 우선)
+if [ -n "${TAG:-}" ]; then
+  BACKEND_TAG=${BACKEND_TAG:-$TAG}
+  FRONT_TAG=${FRONT_TAG:-$TAG${FRONT_VARIANT:+-$FRONT_VARIANT}}
+fi
+HEAD_FRONT=$HEAD_SHA${FRONT_VARIANT:+-$FRONT_VARIANT}
 
 # 셸에 예전에 export한 값이 남아 있으면 HEAD와 다른 버전이 뜰 수 있어 출처를 기록한다
 BACKEND_SRC=환경변수
@@ -51,8 +67,8 @@ fi
 
 FRONT_SRC=환경변수
 if [ -z "${FRONT_TAG:-}" ]; then
-  if [ -d "dist/web-$HEAD_SHA" ]; then
-    FRONT_TAG=$HEAD_SHA FRONT_SRC=HEAD
+  if [ -d "dist/web-$HEAD_FRONT" ]; then
+    FRONT_TAG=$HEAD_FRONT FRONT_SRC=HEAD
   else
     LATEST=$(ls -td dist/web-*/ 2>/dev/null | head -1 || true)
     FRONT_TAG=${LATEST:+$(basename "$LATEST")}
@@ -94,9 +110,9 @@ preflight() {
     die "BACKEND_IMAGE는 $ENV_FILE 이 아니라 셸에서 지정하세요 (BACKEND_IMAGE=... ./deploy/staging.sh up)."
   fi
 
-  [ -n "$BACKEND_TAG" ] || die "backend 이미지를 찾지 못했습니다. BACKEND_TAG=<sha> 로 지정하세요."
-  [ -n "$FRONT_TAG" ] || die "dist/web-* 가 없습니다. TARGET=front ./deploy/build.sh 로 먼저 빌드하세요."
-  [ -d "dist/web-$FRONT_TAG" ] || die "dist/web-$FRONT_TAG 가 없습니다."
+  [ -n "$BACKEND_TAG" ] || die "backend 이미지가 로컬에 없습니다. TAG=<sha> 로 지정하면 pull 합니다."
+  [ -n "$FRONT_TAG" ] || die "dist/web-* 가 없습니다. TAG=<sha> 로 지정하면 frontend 이미지를 pull 해서 꺼냅니다."
+  [ -d "dist/web-$FRONT_TAG" ] || fetch_front "$FRONT_TAG"
 
   # 로컬에 없으면 미리 받는다. compose up 중 실패하면 권한 문제인지 알기 어렵다
   local image="$BACKEND_IMAGE:$BACKEND_TAG" out
@@ -117,6 +133,28 @@ $out"
      && ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]${port}$"; then
     die "호스트 ${port} 포트를 이미 사용 중입니다. FRONT_PORT=<다른 포트> 로 지정하세요."
   fi
+}
+
+# frontend 이미지(FROM scratch, 정적 파일만)를 받아 dist/web-<태그>/ 로 꺼낸다.
+# 'FROM 이미지'만 있는 빌드로 꺼내면 컨테이너용 파일 없이 이미지 내용만 그대로 나온다 (컴파일 없음)
+fetch_front() {
+  local tag=$1 image="$FRONT_IMAGE:$1" dest="dist/web-$1" tmp="dist/.web-$1.tmp" out
+  echo "⬇️  $image 를 받아 $dest 로 꺼냅니다."
+  mkdir -p dist && rm -rf "$tmp"
+  if ! out=$(printf 'FROM %s\n' "$image" \
+             | DOCKER_BUILDKIT=1 docker build -q --output "type=local,dest=$tmp" - 2>&1); then
+    rm -rf "$tmp"
+    if echo "$out" | grep -qiE 'denied|unauthorized|authentication required|no basic auth'; then
+      die "$image pull 권한이 없습니다. 'docker login' 후 다시 실행하세요."
+    fi
+    die "$image 를 받지 못했습니다 (빌드 서버에서 PUSH=1 ./deploy/build.sh 했는지 확인):
+$out"
+  fi
+  [ -f "$tmp/index.html" ] || { rm -rf "$tmp"; die "$image 에 index.html이 없습니다."; }
+  echo "$tag" > "$tmp/version.txt"
+  # nginx 컨테이너(uid 101)가 읽을 수 있도록
+  chmod -R a+rX "$tmp"
+  mv "$tmp" "$dest"
 }
 
 FRONT_ROOT=/usr/share/nginx/html
@@ -166,13 +204,13 @@ prune_dist() {
   # 최근 빌드 순. 사용 중인 폴더, HEAD 폴더, 최근 N개는 남긴다
   while IFS= read -r d; do
     d=${d%/} name=${d##*/} i=$((i + 1))
-    if [ "$i" -le "$keep_n" ] || [ "$name" = "$mounted" ] || [ "$name" = "web-$HEAD_SHA" ]; then
+    if [ "$i" -le "$keep_n" ] || [ "$name" = "$mounted" ] || [ "$name" = "web-$HEAD_FRONT" ]; then
       continue
     fi
     del+=("$d")
   done < <(ls -td dist/web-*/ 2>/dev/null || true)
 
-  echo "남김: 최근 ${keep_n}개, 사용 중 ${mounted:-없음}, HEAD web-$HEAD_SHA"
+  echo "남김: 최근 ${keep_n}개, 사용 중 ${mounted:-없음}, HEAD web-$HEAD_FRONT"
   if [ ${#del[@]} -eq 0 ]; then
     echo "지울 dist가 없습니다."
     return 0
@@ -190,6 +228,7 @@ prune_dist() {
 show_tags() {
   echo "HEAD=$HEAD_SHA"
   echo "BACKEND_IMAGE=$BACKEND_IMAGE"
+  echo "FRONT_IMAGE=$FRONT_IMAGE"
   echo "BACKEND_TAG=$BACKEND_TAG ($BACKEND_SRC)"
   echo "FRONT_TAG=$FRONT_TAG ($FRONT_SRC)"
   echo "FRONT_PORT=${FRONT_PORT:-8080}"

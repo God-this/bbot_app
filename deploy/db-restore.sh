@@ -9,8 +9,7 @@ set -euo pipefail
 #   ./deploy/db-restore.sh <덤프 파일> --force --delete-dump   # 복원에 성공하면 덤프 파일 삭제
 #   ./deploy/db-restore.sh --check              # 복원 없이 현재 DB 상태만 출력
 #
-# 덤프는 custom 형식(pg_dump -Fc)만 받는다. 운영(EC2)에서 만드는 방법:
-#   pg_dump -Fc -h <호스트> -p <포트> -U <사용자> -d <DB> -f bebot_staging.dump
+# 덤프는 custom 형식(pg_dump -Fc)만 받는다. 운영(EC2, compose)에서는 ./deploy/dump.sh 로 만든다.
 #   EC2 키는 Mac에만 있으므로 EC2 → Mac → 스테이징 서버 순서로 옮긴다 (scp).
 #   덤프에는 운영 개인정보(사용자, 대화 기록)가 들어 있다. Mac 사본은 scp 직후 지우고,
 #   스테이징 서버 사본은 마지막 복원에 --delete-dump 를 붙여 지운다.

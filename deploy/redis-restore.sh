@@ -10,8 +10,7 @@ set -euo pipefail
 #   ./deploy/redis-restore.sh --check              # 복원 없이 현재 redis 상태만 출력
 #
 # 캐시 답변은 DB 내용을 기준으로 만들어졌으므로 db-restore.sh 다음에, 같은 시점의 파일로 복원한다.
-# 운영(EC2)에서 만드는 방법:
-#   redis-cli BGSAVE 후 LASTSAVE 값이 바뀌면 $(redis-cli CONFIG GET dir)/dump.rdb 를 복사한다.
+# 운영(EC2, compose)에서는 ./deploy/dump.sh 로 DB 덤프와 함께 만든다.
 #   EC2 → Mac → 스테이징 서버 순서로 옮긴다 (scp).
 #   캐시에는 사용자 질문과 답변이 들어 있다. Mac 사본은 scp 직후 지우고,
 #   스테이징 서버 사본은 --delete-dump 를 붙여 지운다.
