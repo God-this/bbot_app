@@ -11,9 +11,9 @@ logger = get_logger(__name__)
 embedding_model = _get_embedding_model()
 
 r = redis.Redis(
-    host=os.getenv("REDIS_HOST", "localhost"),
-    port=int(os.getenv("REDIS_PORT", "6379")),
-    db=int(os.getenv("REDIS_DB", "0")),
+    host=os.getenv("REDIS_HOST") or "localhost",
+    port=int(os.getenv("REDIS_PORT") or "6379"),
+    db=int(os.getenv("REDIS_DB") or "0"),
     decode_responses=True
 )
 

@@ -6,7 +6,7 @@ load_dotenv()
 
 # ==================== Provider 선택 ====================
 PROVIDER = os.getenv("PROVIDER")
-EMBED_PROVIDER = os.getenv("EMBED_PROVIDER", PROVIDER)  # 미설정 시 PROVIDER와 동일
+EMBED_PROVIDER = os.getenv("EMBED_PROVIDER") or PROVIDER  # 미설정 시 PROVIDER와 동일
 
 # ==================== Upstage ====================
 UPSTAGE_API_KEY  = os.getenv("UPSTAGE_API_KEY")
@@ -23,17 +23,17 @@ OPENAI_EMBED_MODEL = os.getenv("OPENAI_EMBED_MODEL")
 OPENAI_EMBED_DIM   = 1536
 
 # ==================== Ollama ====================
-OLLAMA_BASE_URL    = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_BASE_URL    = os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434"
 OLLAMA_LLM_MODEL   = os.getenv("OLLAMA_LLM_MODEL")
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL")
-OLLAMA_EMBED_DIM   = int(os.getenv("OLLAMA_EMBED_DIM", "768"))    # nomic-embed-text 기본값
+OLLAMA_EMBED_DIM   = int(os.getenv("OLLAMA_EMBED_DIM") or "768")    # nomic-embed-text 기본값
 
 # ==================== Judge Provider ====================
-JUDGE_PROVIDER       = os.getenv("JUDGE_PROVIDER", PROVIDER)
-JUDGE_UPSTAGE_MODEL  = os.getenv("JUDGE_UPSTAGE_MODEL", UPSTAGE_LLM_MODEL)
-JUDGE_OPENAI_MODEL   = os.getenv("JUDGE_OPENAI_MODEL", OPENAI_LLM_MODEL)
-JUDGE_OLLAMA_MODEL   = os.getenv("JUDGE_OLLAMA_MODEL", OLLAMA_LLM_MODEL)
-JUDGE_OLLAMA_BASE_URL = os.getenv("JUDGE_OLLAMA_BASE_URL", OLLAMA_BASE_URL)
+JUDGE_PROVIDER       = os.getenv("JUDGE_PROVIDER") or PROVIDER
+JUDGE_UPSTAGE_MODEL  = os.getenv("JUDGE_UPSTAGE_MODEL") or UPSTAGE_LLM_MODEL
+JUDGE_OPENAI_MODEL   = os.getenv("JUDGE_OPENAI_MODEL") or OPENAI_LLM_MODEL
+JUDGE_OLLAMA_MODEL   = os.getenv("JUDGE_OLLAMA_MODEL") or OLLAMA_LLM_MODEL
+JUDGE_OLLAMA_BASE_URL = os.getenv("JUDGE_OLLAMA_BASE_URL") or OLLAMA_BASE_URL
 
 # ==================== 현재 Provider 기준 값 ====================
 if PROVIDER == "upstage":
