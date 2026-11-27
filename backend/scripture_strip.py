@@ -86,6 +86,10 @@ _DEVOTIONAL_TAIL = re.compile(
 )
 
 
+# 5) bible_verify가 답변 끝에 붙이는 '참고 구절' 블록 — 통째로 지운다.
+_APPENDIX_BLOCK = re.compile(r"\n*\*\*참고 구절[^\n]*\*\*[\s\S]*$")
+
+
 def strip_scripture(answer: str) -> str:
     """답변에서 성경 인용과 묵상 마무리를 제거한 '본문만' 문자열을 반환.
 
@@ -96,7 +100,8 @@ def strip_scripture(answer: str) -> str:
     if not answer:
         return answer
 
-    text = _QUOTED_CITATION.sub(" ", answer)
+    text = _APPENDIX_BLOCK.sub("", answer)
+    text = _QUOTED_CITATION.sub(" ", text)
     text = _CITATION_ONLY.sub(" ", text)
     text = _INLINE_REF_SENTENCE.sub(" ", text)
     # 묵상 문구는 마지막 문장에만 적용한다(본문 설명 보존).
